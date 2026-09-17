@@ -27,4 +27,6 @@ $backend.Id | Out-File "$root\backend.pid" -Encoding ascii
 $frontend.Id | Out-File "$root\frontend.pid" -Encoding ascii
 
 Write-Host "backend  pid=$($backend.Id)  log=backend_run.log  http://127.0.0.1:8001"
-Write-Host "frontend pid=$($frontend.Id)  log=frontend_run.log http://127.0.0.1:5173"
+Write-Host "frontend pid=$($frontend.Id)  log=frontend_run.log http://localhost:5173"
+Write-Host ""
+Write-Host "Открой фронтенд: http://localhost:5173"

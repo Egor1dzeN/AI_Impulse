@@ -1,0 +1,63 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Impulse</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Onest:wght@300..700&family=Unbounded:wght@200..600&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+<header class="bar">
+  <div class="mark" id="mark">Impulse</div>
+  <div class="bar__right">
+    <button class="ghost" id="reset" type="button" hidden>
+      <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10"/></svg>
+      Новый чат
+    </button>
+  </div>
+</header>
+
+<div class="stage" id="stage" aria-hidden="true"><canvas id="core"></canvas></div>
+
+<main class="main" id="main">
+  <section class="hero" id="hero">
+    <h1 class="hero__title">О чём подумаем?</h1>
+    <p class="hero__sub">Impulse отвечает на вопросы, разбирает код и помогает довести идею до формы.</p>
+    <div class="chips" id="chips">
+      <button class="chip" type="button">Объясни квантовую запутанность</button>
+      <button class="chip" type="button">Разбери мой SQL-запрос</button>
+      <button class="chip" type="button">Придумай название для кофейни</button>
+      <button class="chip" type="button">Что почитать про типографику</button>
+    </div>
+  </section>
+
+  <div class="feed" id="feed" role="log" aria-live="polite" aria-label="Переписка"></div>
+</main>
+
+<div class="dock">
+  <form class="composer" id="composer" autocomplete="off">
+    <textarea id="input" class="composer__input" rows="1" placeholder="Спросите что угодно…" aria-label="Сообщение"></textarea>
+    <div class="composer__row">
+      <button class="icon" type="button" id="attach" aria-label="Прикрепить файл">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M13.5 7.5 8.2 12.8a2 2 0 0 0 2.8 2.8l5.7-5.7a3.7 3.7 0 0 0-5.2-5.2L5.2 10.9a5.4 5.4 0 0 0 7.6 7.6"/></svg>
+      </button>
+      <span class="hint">Enter — отправить, Shift+Enter — новая строка</span>
+      <button class="send" id="send" type="submit" aria-label="Отправить">
+        <svg viewBox="0 0 20 20" aria-hidden="true"><path d="M10 16V4M4.8 9.2 10 4l5.2 5.2"/></svg>
+      </button>
+      <button class="send send--stop" id="stop" type="button" aria-label="Остановить" hidden>
+        <svg viewBox="0 0 20 20" aria-hidden="true"><rect x="6.5" y="6.5" width="7" height="7" rx="1.5"/></svg>
+      </button>
+    </div>
+  </form>
+  <p class="disclaimer">Демо-режим: ответы генерируются локально, без обращения к модели.</p>
+</div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="app.js"></script>
+</body>
+</html>

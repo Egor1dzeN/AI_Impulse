@@ -1,1 +1,12 @@
 .claude
+.idea
+/backend/.venv
+/backend/data/hf_cache
+/backend/data/*.db
+/backend/data/memory_index
+**/__pycache__/
+*.pyc
+*.pid
+/dist
+*.log
+memory (2).rar

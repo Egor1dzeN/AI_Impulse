@@ -1,17 +1,11 @@
 from __future__ import annotations
 
-import os
 import sys
 from pathlib import Path
 from threading import Lock
 from typing import Any
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
-
-# The system C: drive is nearly full; keep all Hugging Face model downloads
-# on D: (this project's drive) instead of the default C:\Users\...\.cache.
-# Must be set before transformers/huggingface_hub are imported anywhere.
-os.environ.setdefault("HF_HOME", str(DATA_DIR / "hf_cache"))
 
 # The `memory/` package (written outside this backend) uses flat, non-relative
 # imports internally (e.g. `from enricher import MemoryEnricher`), so it must

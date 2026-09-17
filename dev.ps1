@@ -17,6 +17,20 @@ Stop-Port 8001
 Stop-Port 5173
 Start-Sleep -Seconds 1
 
+if (-not (Test-Path "$root\backend\.venv\Scripts\python.exe")) {
+    Write-Host "backend\.venv не найден, создаю venv и ставлю зависимости (это может занять несколько минут)..."
+    python -m venv "$root\backend\.venv"
+    & "$root\backend\.venv\Scripts\python.exe" -m pip install --upgrade pip
+    & "$root\backend\.venv\Scripts\python.exe" -m pip install -r "$root\backend\requirements.txt"
+}
+
+if (-not (Test-Path "$root\frontend\node_modules")) {
+    Write-Host "frontend\node_modules не найден, ставлю зависимости..."
+    Push-Location "$root\frontend"
+    npm install
+    Pop-Location
+}
+
 $backend = Start-Process -FilePath "$root\backend\run_backend.cmd" `
     -WorkingDirectory "$root\backend" -WindowStyle Hidden -PassThru
 

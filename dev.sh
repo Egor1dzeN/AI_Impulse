@@ -22,11 +22,25 @@ stop_port 8001
 stop_port 5173
 sleep 1
 
+# --- backend: create venv + install deps if missing ---
 cd "$root/backend"
+if [ ! -f ".venv/Scripts/python.exe" ]; then
+    echo "backend/.venv не найден, создаю venv и ставлю зависимости (это может занять несколько минут)..."
+    python -m venv .venv
+    .venv/Scripts/python.exe -m pip install --upgrade pip
+    .venv/Scripts/python.exe -m pip install -r requirements.txt
+fi
+
 nohup .venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001 > "$root/backend_run.log" 2>&1 &
 backend_pid=$!
 
+# --- frontend: install deps if missing ---
 cd "$root/frontend"
+if [ ! -d "node_modules" ]; then
+    echo "frontend/node_modules не найден, ставлю зависимости..."
+    npm install
+fi
+
 nohup npm run dev > "$root/frontend_run.log" 2>&1 &
 frontend_pid=$!
 

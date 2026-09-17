@@ -4,25 +4,36 @@
 
 ### Вариант 1 — одной командой (рекомендуется)
 
-В корне проекта есть скрипт `dev.ps1`, который поднимает и backend, и frontend, убивая старые процессы на портах 8001/5173:
+В корне проекта есть скрипт `dev.ps1` (PowerShell) и его аналог `dev.sh` (Git Bash) — оба поднимают backend и frontend, убивают старые процессы на портах 8001/5173, а при первом запуске (или после клонирования репозитория) сами создают `backend/.venv`, ставят зависимости из `requirements.txt` и делают `npm install` во `frontend/`, если этого ещё не было.
 
 ```powershell
 powershell -File dev.ps1
 ```
 
+```bash
+./dev.sh
+```
+
+Если PowerShell ругается на execution policy ("running scripts is disabled on this system"), используй `dev.sh` в Git Bash, либо `powershell -ExecutionPolicy Bypass -File dev.ps1`.
+
+Первый запуск после клонирования может занять несколько минут — ставятся тяжёлые зависимости backend (torch, transformers и т.д.).
+
 После этого:
 - Backend: http://127.0.0.1:8001 (логи → `backend_run.log`, pid → `backend.pid`)
-- Frontend: http://127.0.0.1:5173 (логи → `frontend_run.log`, pid → `frontend.pid`)
+- Frontend: http://localhost:5173 (логи → `frontend_run.log`, pid → `frontend.pid`)
 
-Открой в браузере **http://127.0.0.1:5173**.
+Открой в браузере **http://localhost:5173**.
 
 Чтобы остановить оба процесса:
 
 ```powershell
 powershell -File stop.ps1
 ```
+```bash
+./stop.sh
+```
 
-(либо просто перезапусти `dev.ps1` — он сам убивает старые процессы перед запуском новых).
+(либо просто перезапусти `dev.ps1`/`dev.sh` — он сам убивает старые процессы перед запуском новых).
 
 ### Вариант 2 — вручную, по отдельности
 

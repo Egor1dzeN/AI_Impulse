@@ -6,7 +6,7 @@ from fastapi import BackgroundTasks, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from . import agent, db, memory_bridge, tools
+from . import agent, db, mcp_tools, memory_bridge, tools
 from .schemas import ChatRequest, MemoryOut
 
 app = FastAPI(title="Impulse Agent API")
@@ -20,8 +20,9 @@ app.add_middleware(
 
 
 @app.on_event("startup")
-def on_startup() -> None:
+async def on_startup() -> None:
     db.init_db()
+    await mcp_tools.refresh_mcp_tools()
 
 
 @app.get("/api/health")

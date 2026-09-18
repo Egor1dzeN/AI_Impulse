@@ -9,3 +9,4 @@
 /dist
 *.log
 memory (2).rar
+/backend/mcp_servers.json

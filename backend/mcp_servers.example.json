@@ -1,0 +1,12 @@
+{
+  "_comment": "Copy this file to mcp_servers.json (same folder) and fill in real servers to give the agent MCP tools. Left absent/empty, the agent runs with only its local tools + memory search, exactly as before. Keys are server names, values follow langchain-mcp-adapters' MultiServerMCPClient config shape.",
+  "example-http-server": {
+    "transport": "streamable_http",
+    "url": "http://localhost:8931/mcp"
+  },
+  "example-stdio-server": {
+    "transport": "stdio",
+    "command": "npx",
+    "args": ["-y", "@some-org/some-mcp-server"]
+  }
+}

@@ -11,3 +11,6 @@ faiss-cpu
 numpy
 tiktoken
 protobuf
+langchain-core
+langgraph
+langchain-mcp-adapters

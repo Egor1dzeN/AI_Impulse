@@ -136,9 +136,11 @@ from __future__ import annotations
 
 import os
 import time
+from threading import Thread
+from typing import Iterator
 
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
+from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TextIteratorStreamer
 
 
 class QwenModel:
@@ -248,5 +250,75 @@ class QwenModel:
             f"new_tokens={generated_tokens.shape[0]} | "
             f"GPU={allocated:.2f}/{reserved:.2f} GB"
         )
+        print(f"[QWEN] response: {response!r}")
 
         return response
+
+    def generate_stream(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_new_tokens: int = 512,
+    ) -> Iterator[str]:
+        """Same as `generate`, but yields text pieces as they're produced
+        instead of returning the full response at once."""
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_prompt},
+        ]
+
+        inputs = self.tokenizer.apply_chat_template(
+            messages,
+            tokenize=True,
+            add_generation_prompt=True,
+            enable_thinking=False,
+            return_tensors="pt",
+        )
+
+        input_ids = inputs["input_ids"]
+        attention_mask = inputs.get("attention_mask")
+
+        input_device = self.model.get_input_embeddings().weight.device
+        input_ids = input_ids.to(input_device)
+
+        if attention_mask is not None:
+            attention_mask = attention_mask.to(input_device)
+
+        streamer = TextIteratorStreamer(
+            self.tokenizer,
+            skip_prompt=True,
+            skip_special_tokens=True,
+        )
+
+        generation_kwargs = dict(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_new_tokens=max_new_tokens,
+            do_sample=False,
+            use_cache=True,
+            pad_token_id=self.tokenizer.eos_token_id,
+            streamer=streamer,
+        )
+
+        start = time.perf_counter()
+        thread = Thread(target=self.model.generate, kwargs=generation_kwargs)
+        thread.start()
+
+        new_tokens = 0
+        full_text_parts: list[str] = []
+        for piece in streamer:
+            full_text_parts.append(piece)
+            if piece:
+                new_tokens += 1
+                yield piece
+        thread.join()
+
+        elapsed = time.perf_counter() - start
+        allocated, reserved = self._gpu_memory()
+        full_text = "".join(full_text_parts)
+        print(
+            f"[QWEN stream] {elapsed:.3f}s | "
+            f"pieces={new_tokens} | "
+            f"GPU={allocated:.2f}/{reserved:.2f} GB"
+        )
+        print(f"[QWEN stream] response: {full_text!r}")

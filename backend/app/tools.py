@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from typing import Any, Callable
+from typing import Any
 
-from . import db
+from langchain_core.tools import BaseTool, tool
+
+from . import db, memory_bridge
+
+MEMORY_TOOL_NAME = "search_memory"
 
 # ============================================================
 # TOPIC 1 — CALENDAR & TASKS
 # ============================================================
 
 
-def create_task(user_id: str, title: str, due_date: str | None = None, notes: str | None = None) -> dict[str, Any]:
+def create_task_impl(user_id: str, title: str, due_date: str | None = None, notes: str | None = None) -> dict[str, Any]:
     row_id = db.new_id()
     with db.get_conn() as conn:
         conn.execute(
@@ -21,7 +25,7 @@ def create_task(user_id: str, title: str, due_date: str | None = None, notes: st
     return {"id": row_id, "title": title, "due_date": due_date, "notes": notes}
 
 
-def list_tasks(user_id: str) -> dict[str, Any]:
+def list_tasks_impl(user_id: str) -> dict[str, Any]:
     with db.get_conn() as conn:
         rows = conn.execute(
             "SELECT id, title, due_date, notes, done, created_at FROM tasks "
@@ -36,7 +40,7 @@ def list_tasks(user_id: str) -> dict[str, Any]:
 # ============================================================
 
 
-def add_expense(user_id: str, amount: float, category: str, date: str, note: str | None = None) -> dict[str, Any]:
+def add_expense_impl(user_id: str, amount: float, category: str, date: str, note: str | None = None) -> dict[str, Any]:
     row_id = db.new_id()
     with db.get_conn() as conn:
         conn.execute(
@@ -47,7 +51,7 @@ def add_expense(user_id: str, amount: float, category: str, date: str, note: str
     return {"id": row_id, "amount": amount, "category": category, "date": date}
 
 
-def get_expense_summary(user_id: str) -> dict[str, Any]:
+def get_expense_summary_impl(user_id: str) -> dict[str, Any]:
     with db.get_conn() as conn:
         rows = conn.execute(
             "SELECT amount, category, date FROM expenses WHERE user_id = ?",
@@ -74,7 +78,7 @@ def get_expense_summary(user_id: str) -> dict[str, Any]:
 # ============================================================
 
 
-def log_meal(
+def log_meal_impl(
     user_id: str,
     name: str,
     kcal: float,
@@ -93,7 +97,7 @@ def log_meal(
     return {"id": row_id, "name": name, "kcal": kcal, "date": date}
 
 
-def log_weight(user_id: str, value_kg: float, date: str) -> dict[str, Any]:
+def log_weight_impl(user_id: str, value_kg: float, date: str) -> dict[str, Any]:
     row_id = db.new_id()
     with db.get_conn() as conn:
         conn.execute(
@@ -106,7 +110,7 @@ def log_weight(user_id: str, value_kg: float, date: str) -> dict[str, Any]:
 DAILY_KCAL_GOAL = 2200
 
 
-def get_health_summary(user_id: str) -> dict[str, Any]:
+def get_health_summary_impl(user_id: str) -> dict[str, Any]:
     with db.get_conn() as conn:
         meal_rows = conn.execute(
             "SELECT name, kcal, protein, fat, carbs, date FROM meals WHERE user_id = ? ORDER BY date DESC",
@@ -135,77 +139,78 @@ def get_health_summary(user_id: str) -> dict[str, Any]:
 
 
 # ============================================================
-# TOOL REGISTRY — exposed to the LLM as callable actions
+# LANGCHAIN TOOLS — bound to one user_id, handed to the LangGraph agent
 # ============================================================
-
-TOOLS: dict[str, Callable[..., dict[str, Any]]] = {
-    "create_task": create_task,
-    "list_tasks": list_tasks,
-    "add_expense": add_expense,
-    "get_expense_summary": get_expense_summary,
-    "log_meal": log_meal,
-    "log_weight": log_weight,
-    "get_health_summary": get_health_summary,
-}
-
-# name -> (description, argument schema) used to build the system prompt
-TOOL_SPECS: dict[str, dict[str, Any]] = {
-    "create_task": {
-        "description": "Создать задачу/напоминание с дедлайном. Действие на запись.",
-        "arguments": {
-            "title": "string, обязательно",
-            "due_date": "string YYYY-MM-DD, опционально",
-            "notes": "string, опционально",
-        },
-    },
-    "list_tasks": {
-        "description": "Показать последние задачи пользователя.",
-        "arguments": {},
-    },
-    "add_expense": {
-        "description": "Записать трату. Действие на запись.",
-        "arguments": {
-            "amount": "число, сумма в рублях, обязательно",
-            "category": "string, например 'еда', 'транспорт', обязательно",
-            "date": "string YYYY-MM-DD, обязательно (используй сегодняшнюю дату, если пользователь не указал)",
-            "note": "string, опционально",
-        },
-    },
-    "get_expense_summary": {
-        "description": "Получить сводку трат по категориям и месяцам.",
-        "arguments": {},
-    },
-    "log_meal": {
-        "description": "Записать приём пищи с КБЖУ. Действие на запись.",
-        "arguments": {
-            "name": "string, что съел, обязательно",
-            "kcal": "число, калории, обязательно",
-            "date": "string YYYY-MM-DD, обязательно",
-            "protein": "число, опционально",
-            "fat": "число, опционально",
-            "carbs": "число, опционально",
-        },
-    },
-    "log_weight": {
-        "description": "Записать вес пользователя. Действие на запись.",
-        "arguments": {
-            "value_kg": "число, вес в кг, обязательно",
-            "date": "string YYYY-MM-DD, обязательно",
-        },
-    },
-    "get_health_summary": {
-        "description": "Получить сводку по калориям за сегодня и динамике веса.",
-        "arguments": {},
-    },
-}
-
-WRITE_TOOLS = {"create_task", "add_expense", "log_meal", "log_weight"}
+#
+# Each request builds its own tool instances (via build_action_tools /
+# build_memory_tool) closed over that request's user_id, since the raw
+# functions above are keyed by user but the LLM must never see or fill in
+# user_id itself. MCP-provided tools are plain LangChain BaseTool instances
+# too, so agent_graph.py can merge them into the same flat list this module
+# produces without any special-casing.
 
 
-def call_tool(name: str, user_id: str, arguments: dict[str, Any]) -> dict[str, Any]:
-    if name not in TOOLS:
-        raise ValueError(f"Unknown tool: {name}")
-    return TOOLS[name](user_id=user_id, **arguments)
+def build_action_tools(user_id: str) -> list[BaseTool]:
+    """Task/expense/health tools exposed to the agent for one user."""
+
+    @tool
+    def create_task(title: str, due_date: str | None = None, notes: str | None = None) -> dict:
+        """Создать задачу/напоминание с дедлайном. Действие на запись. due_date — YYYY-MM-DD, опционально."""
+        return create_task_impl(user_id=user_id, title=title, due_date=due_date, notes=notes)
+
+    @tool
+    def list_tasks() -> dict:
+        """Показать последние задачи пользователя."""
+        return list_tasks_impl(user_id=user_id)
+
+    @tool
+    def add_expense(amount: float, category: str, date: str, note: str | None = None) -> dict:
+        """Записать трату. Действие на запись. date — YYYY-MM-DD, используй сегодняшнюю дату, если пользователь не указал."""
+        return add_expense_impl(user_id=user_id, amount=amount, category=category, date=date, note=note)
+
+    @tool
+    def get_expense_summary() -> dict:
+        """Получить сводку трат по категориям и месяцам."""
+        return get_expense_summary_impl(user_id=user_id)
+
+    @tool
+    def log_meal(
+        name: str,
+        kcal: float,
+        date: str,
+        protein: float | None = None,
+        fat: float | None = None,
+        carbs: float | None = None,
+    ) -> dict:
+        """Записать приём пищи с КБЖУ. Действие на запись. date — YYYY-MM-DD."""
+        return log_meal_impl(
+            user_id=user_id, name=name, kcal=kcal, date=date, protein=protein, fat=fat, carbs=carbs
+        )
+
+    @tool
+    def log_weight(value_kg: float, date: str) -> dict:
+        """Записать вес пользователя. Действие на запись. date — YYYY-MM-DD."""
+        return log_weight_impl(user_id=user_id, value_kg=value_kg, date=date)
+
+    @tool
+    def get_health_summary() -> dict:
+        """Получить сводку по калориям за сегодня и динамике веса."""
+        return get_health_summary_impl(user_id=user_id)
+
+    return [create_task, list_tasks, add_expense, get_expense_summary, log_meal, log_weight, get_health_summary]
+
+
+def build_memory_tool(user_id: str) -> BaseTool:
+    """The memory-retriever tool: the agent decides on its own, per query,
+    whether to call this (and how many times) before answering."""
+
+    @tool(MEMORY_TOOL_NAME)
+    def search_memory(query: str) -> str:
+        """Найти релевантные факты о пользователе в долгосрочной памяти. Передавай короткий целевой поисковый запрос (например «любимая еда» или «дедлайн проекта»), а не весь вопрос пользователя целиком. Можно вызывать несколько раз подряд с разными формулировками, если первого результата недостаточно."""
+        context = memory_bridge.retrieve_memory_context(query, user_id, top_k=5)
+        return context if context else "По этому запросу в памяти ничего не найдено."
+
+    return search_memory
 
 
 def get_sandbox_snapshot(user_id: str) -> dict[str, Any]:

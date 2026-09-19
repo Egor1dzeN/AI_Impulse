@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { addMemory, deleteMemory, fetchMemories, fetchSandbox } from '../lib/api';
+import { addMemory, deleteMemory, fetchMemories, fetchSandbox, searchMemories } from '../lib/api';
 
 const TYPE_LABELS = {
   fact: 'Факт',
@@ -20,6 +20,10 @@ export default function MemoryPanel({ open, onClose }) {
   const [adding, setAdding] = useState(false);
   const [addError, setAddError] = useState('');
   const [removingId, setRemovingId] = useState(null);
+  const [searchInput, setSearchInput] = useState('');
+  const [searchResults, setSearchResults] = useState(null);
+  const [searching, setSearching] = useState(false);
+  const [searchError, setSearchError] = useState('');
 
   function loadMemories() {
     return fetchMemories().then(setMemories);
@@ -27,6 +31,9 @@ export default function MemoryPanel({ open, onClose }) {
 
   useEffect(() => {
     if (!open) return;
+    setSearchInput('');
+    setSearchResults(null);
+    setSearchError('');
     setLoading(true);
     Promise.all([loadMemories(), fetchSandbox().then(setSandbox)])
       .catch(() => {})
@@ -52,11 +59,34 @@ export default function MemoryPanel({ open, onClose }) {
     }
   }
 
+  async function submitSearch(e) {
+    e.preventDefault();
+    const q = searchInput.trim();
+    if (!q || searching) return;
+    setSearching(true);
+    setSearchError('');
+    try {
+      const hits = await searchMemories(q);
+      setSearchResults(hits);
+    } catch {
+      setSearchError('Не получилось найти. Попробуйте ещё раз.');
+    } finally {
+      setSearching(false);
+    }
+  }
+
+  function clearSearch() {
+    setSearchInput('');
+    setSearchResults(null);
+    setSearchError('');
+  }
+
   async function removeMemory(id) {
     setRemovingId(id);
     try {
       await deleteMemory(id);
       setMemories((prev) => prev.filter((m) => m.id !== id));
+      setSearchResults((prev) => (prev ? prev.filter((m) => m.id !== id) : prev));
     } catch {
       // leave it in place if the delete failed
     } finally {
@@ -92,11 +122,32 @@ export default function MemoryPanel({ open, onClose }) {
           </form>
           {addError && <p className="memory-panel__hint memory-panel__hint--error">{addError}</p>}
 
-          {memories.length === 0 && !loading && (
+          <form className="memory-add" onSubmit={submitSearch}>
+            <input
+              type="text"
+              placeholder="Поиск по памяти…"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              disabled={searching}
+            />
+            {searchResults ? (
+              <button type="button" className="ghost" onClick={clearSearch}>Сбросить</button>
+            ) : (
+              <button type="submit" className="ghost" disabled={searching || !searchInput.trim()}>
+                {searching ? 'Ищу…' : 'Найти'}
+              </button>
+            )}
+          </form>
+          {searchError && <p className="memory-panel__hint memory-panel__hint--error">{searchError}</p>}
+
+          {searchResults && searchResults.length === 0 && !searching && (
+            <p className="memory-panel__hint">Ничего не найдено по этому запросу.</p>
+          )}
+          {!searchResults && memories.length === 0 && !loading && (
             <p className="memory-panel__hint">Пока ничего — напишите что-нибудь о себе в чате или добавьте вручную.</p>
           )}
           <ul className="memory-list">
-            {memories.map((m) => (
+            {(searchResults ?? memories).map((m) => (
               <li key={m.id}>
                 <span className="memory-list__type">{TYPE_LABELS[m.type] || m.type}</span>
                 <span className="memory-list__content">{m.content}</span>

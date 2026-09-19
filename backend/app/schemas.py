@@ -59,6 +59,10 @@ class MemoryOut(BaseModel):
     created_at: str
 
 
+class MemorySearchOut(MemoryOut):
+    relevance: float
+
+
 class SandboxOut(BaseModel):
     tasks: list[dict[str, Any]]
     expenses: list[dict[str, Any]]

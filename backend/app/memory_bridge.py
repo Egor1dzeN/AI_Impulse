@@ -197,6 +197,29 @@ def delete_memory(memory_id: str, user_id: str) -> None:
     _get_lightweight_index_manager().rebuild()
 
 
+def search_memories(query: str, user_id: str, top_k: int = 5) -> list[dict[str, Any]]:
+    """Structured semantic search over one user's memories — the same
+    embed -> FAISS -> rerank pipeline the search_memory tool uses, but
+    returning ranked hits (with scores) instead of a flattened text blob
+    meant for the LLM. Used for a manual search box in the UI. Needs the
+    full model stack (embedder + reranker), same as retrieve_memory_context."""
+    system = get_memory_system()
+    hits = system.retrieve(query, user_id, top_k)
+    return [
+        {
+            "id": hit.memory.id,
+            "type": hit.memory.type.value,
+            "content": hit.memory.content,
+            "confidence": hit.memory.confidence,
+            "importance": hit.memory.importance,
+            "status": hit.memory.status.value,
+            "created_at": hit.memory.created_at.isoformat() if hit.memory.created_at else "",
+            "relevance": hit.reranker_score,
+        }
+        for hit in hits
+    ]
+
+
 def list_memories(user_id: str) -> list[dict[str, Any]]:
     memories = _get_repository().find_by_user(user_id=user_id, active_only=False)
     return [

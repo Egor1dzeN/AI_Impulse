@@ -15,6 +15,7 @@ from .schemas import (
     GoogleLoginRequest,
     LoginRequest,
     MemoryOut,
+    MemorySearchOut,
     RegisterRequest,
     SandboxOut,
     TokenOut,
@@ -128,6 +129,13 @@ def history(conversation_id: str, user_id: str = Depends(auth.get_current_user_i
 @app.get("/api/memories", response_model=list[MemoryOut])
 def memories(user_id: str = Depends(auth.get_current_user_id)) -> list[dict]:
     return memory_bridge.list_memories(user_id)
+
+
+@app.get("/api/memories/search", response_model=list[MemorySearchOut])
+def search_memories(q: str, user_id: str = Depends(auth.get_current_user_id)) -> list[dict]:
+    if not q.strip():
+        raise HTTPException(status_code=400, detail="empty query")
+    return memory_bridge.search_memories(q, user_id)
 
 
 @app.post("/api/memories")

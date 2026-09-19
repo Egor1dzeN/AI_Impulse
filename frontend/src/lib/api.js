@@ -78,6 +78,12 @@ export function addMemory(content) {
   }).then(json);
 }
 
+export function searchMemories(query) {
+  return fetch(`${BASE}/api/memories/search?q=${encodeURIComponent(query)}`, {
+    headers: authHeaders(),
+  }).then(json);
+}
+
 export function deleteMemory(memoryId) {
   return fetch(`${BASE}/api/memories/${memoryId}`, {
     method: 'DELETE',

@@ -624,13 +624,21 @@ Qwen3-4B, отдельным вызовом валидирует уже извл
 | `POST` | `/api/auth/register` | `{username, password}` → `{access_token}` |
 | `POST` | `/api/auth/login` | `{username, password}` → `{access_token}` |
 | `POST` | `/api/auth/google` | `{id_token}` (Google ID-токен) → `{access_token}` |
-| `POST` | `/api/chat` | `{message}` (auth: `Bearer <token>`) → SSE-поток (`token`/`tool_call`/`done`); один ход диалога + фоновая запись в память |
-| `GET` | `/api/history` | вся история чата пользователя (из токена) |
+| `POST` | `/api/conversations` | создать новый чат → `{id, title, created_at, updated_at}` |
+| `GET` | `/api/conversations` | список чатов пользователя, свежие первыми |
+| `DELETE` | `/api/conversations/{id}` | удалить чат и его сообщения |
+| `POST` | `/api/chat` | `{conversation_id, message, enable_thinking?}` (auth: `Bearer <token>`) → SSE-поток (`token`/`tool_call`/`done`); один ход диалога + фоновая запись в память |
+| `GET` | `/api/history?conversation_id=...` | история одного чата |
 | `GET` | `/api/memories` | все записи памяти пользователя (включая неактивные — superseded/archived/conflicting) |
+| `POST` | `/api/memories` | `{content}` — добавить факт вручную (идёт через тот же пайплайн извлечения, что и сообщения в чате) |
+| `DELETE` | `/api/memories/{id}` | удалить одну запись памяти |
 | `GET` | `/api/sandbox` | последние 20 задач/трат/приёмов пищи/замеров веса |
 
 `user_id` больше не передаётся клиентом — все защищённые эндпоинты берут его из
-проверенного JWT (`backend/app/auth.py::get_current_user_id`).
+проверенного JWT (`backend/app/auth.py::get_current_user_id`). Чат теперь не
+один общий поток на пользователя, а отдельные диалоги (`conversations`) —
+`/api/chat` и `/api/history` всегда привязаны к конкретному `conversation_id`,
+и это же поле проверяется на принадлежность пользователю (404 на чужой чат).
 
 ---
 
@@ -639,20 +647,32 @@ Qwen3-4B, отдельным вызовом валидирует уже извл
 React 19 + Vite, без стейт-менеджера — состояние чата в `App.jsx` (плоский
 `useState`). Отдельно:
 
+- `components/Login.jsx` — форма входа/регистрации по логину-паролю плюс
+  кнопка Google (Google Identity Services), рендерится вместо всего
+  остального, пока нет JWT (`lib/auth.js`);
 - `components/Chat.jsx` — рендер сообщений, включая markdown-разбор
-  (`lib/markdown.js`) и индикацию tool-call действий;
-- `components/Composer.jsx` — поле ввода с авто-расширением и стриминговым
-  индикатором;
+  (`lib/markdown.js`), встроенную карту для `show_map` и индикацию
+  tool-call действий;
+- `components/Composer.jsx` — поле ввода с авто-расширением, стриминговым
+  индикатором и переключателем "Размышления" (`enable_thinking` на бэкенд);
 - `components/OrbCanvas.jsx` — анимированный "орб"-индикатор состояния на
   Three.js (реагирует на активность через `setEnergy`);
 - `components/MemoryPanel.jsx` — боковая панель "Память": тянет
-  `/api/memories` и `/api/sandbox` и показывает, что ассистент запомнил, и
-  последние записанные действия.
+  `/api/memories` и `/api/sandbox`, показывает, что ассистент запомнил, и
+  последние записанные действия; умеет добавлять факт вручную и удалять
+  записи;
+- `components/ChatList.jsx` — боковая панель со списком чатов пользователя,
+  переключение и удаление;
+- `components/Menu.jsx` — переиспользуемое выпадающее меню (открытие по
+  клику или наведению), на нём построены меню аккаунта в шапке и переключатель
+  настроек у композера.
 
 `lib/api.js` — тонкий клиент: ручной парсинг SSE (`text/event-stream`) по
 `\n\n`-разделителям, без сторонних SSE-библиотек. Все запросы идут на
 относительный `/api/...` — Vite dev-сервер проксирует их на backend (см.
 `vite.config.js`), поэтому работает и на localhost, и через туннель.
+`lib/auth.js` хранит JWT в `localStorage` и прикладывает его как
+`Authorization: Bearer` заголовок к каждому запросу.
 
 ---
 
@@ -665,12 +685,14 @@ backend/
     agent.py            — цикл одного хода диалога (стриминг, ретраи, сохранение)
     agent_graph.py       — сборка LangGraph-графа (agent ⇄ tools)
     chat_model.py         — LangChain-адаптер над локальным Qwen3-4B
-    tools.py               — экшн-тулы (задачи/траты/питание/вес) + memory tool
+    tools.py               — экшн-тулы (задачи/траты/питание/вес/карта/погода/курс) + memory tool
     mcp_tools.py             — опциональная загрузка внешних MCP-серверов
     prompts.py                — сборка системного промпта
     memory_bridge.py            — мост backend ↔ пакет memory/ (sys.path, singletons)
-    db.py                         — SQLite схема приложения (app.db)
-    schemas.py                     — Pydantic-модели запросов/ответов
+    auth.py                      — JWT + пароль/Google-логин
+    conversations.py              — CRUD чатов (create/list/delete/assert_owned)
+    db.py                          — SQLite схема приложения (app.db)
+    schemas.py                      — Pydantic-модели запросов/ответов
   mcp_servers.example.json  — шаблон конфига MCP (копировать в mcp_servers.json)
   requirements.txt
 

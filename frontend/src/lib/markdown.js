@@ -1,17 +1,109 @@
+import hljs from 'highlight.js/lib/core';
+import javascript from 'highlight.js/lib/languages/javascript';
+import typescript from 'highlight.js/lib/languages/typescript';
+import python from 'highlight.js/lib/languages/python';
+import bash from 'highlight.js/lib/languages/bash';
+import json from 'highlight.js/lib/languages/json';
+import xml from 'highlight.js/lib/languages/xml';
+import css from 'highlight.js/lib/languages/css';
+import sql from 'highlight.js/lib/languages/sql';
+import yaml from 'highlight.js/lib/languages/yaml';
+import cpp from 'highlight.js/lib/languages/cpp';
+import csharp from 'highlight.js/lib/languages/csharp';
+import java from 'highlight.js/lib/languages/java';
+import go from 'highlight.js/lib/languages/go';
+import rust from 'highlight.js/lib/languages/rust';
+import php from 'highlight.js/lib/languages/php';
+
+hljs.registerLanguage('javascript', javascript);
+hljs.registerLanguage('typescript', typescript);
+hljs.registerLanguage('python', python);
+hljs.registerLanguage('bash', bash);
+hljs.registerLanguage('json', json);
+hljs.registerLanguage('xml', xml);
+hljs.registerLanguage('css', css);
+hljs.registerLanguage('sql', sql);
+hljs.registerLanguage('yaml', yaml);
+hljs.registerLanguage('cpp', cpp);
+hljs.registerLanguage('csharp', csharp);
+hljs.registerLanguage('java', java);
+hljs.registerLanguage('go', go);
+hljs.registerLanguage('rust', rust);
+hljs.registerLanguage('php', php);
+
+// Common fence-language aliases models actually write, normalized to the
+// canonical names registered above (also the keys LANG_LABELS uses).
+const LANG_ALIASES = {
+  js: 'javascript', jsx: 'javascript', mjs: 'javascript', cjs: 'javascript',
+  ts: 'typescript', tsx: 'typescript',
+  py: 'python', py3: 'python',
+  sh: 'bash', shell: 'bash', zsh: 'bash', console: 'bash',
+  html: 'xml', htm: 'xml',
+  yml: 'yaml',
+  'c++': 'cpp', cc: 'cpp', cxx: 'cpp', c: 'cpp',
+  'c#': 'csharp', cs: 'csharp',
+};
+
+const LANG_LABELS = {
+  javascript: 'JavaScript',
+  typescript: 'TypeScript',
+  python: 'Python',
+  bash: 'Bash',
+  json: 'JSON',
+  xml: 'HTML',
+  css: 'CSS',
+  sql: 'SQL',
+  yaml: 'YAML',
+  cpp: 'C++',
+  csharp: 'C#',
+  java: 'Java',
+  go: 'Go',
+  rust: 'Rust',
+  php: 'PHP',
+};
+
+const esc = (s) =>
+  s.replace(/[&<>]/g, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;'));
+
+// Highlights a fenced code block. `lang` is whatever followed the opening
+// ``` (may be empty, unknown, or an alias like "js"/"py" — hljs resolves
+// those via each language's own `aliases` list). Falls back to
+// auto-detection, then to plain escaped text if even that fails.
+function highlight(code, lang) {
+  if (lang && hljs.getLanguage(lang)) {
+    return { html: hljs.highlight(code, { language: lang, ignoreIllegals: true }).value, lang };
+  }
+  try {
+    const auto = hljs.highlightAuto(code);
+    if (auto.language) return { html: auto.value, lang: auto.language };
+  } catch {
+    // fall through to plain text
+  }
+  return { html: esc(code), lang: '' };
+}
+
 export function md(src) {
-  const esc = (s) =>
-    s.replace(/[&<>]/g, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;'));
-
-  const blocks = [];
-  src = src.replace(/```[a-z]*\n?([\s\S]*?)(?:```|$)/g, (m, code) => {
-    blocks.push(`<pre class="code"><code>${esc(code.replace(/\n$/, ''))}</code></pre>`);
-    return `@@code${blocks.length - 1}@@`;
-  });
-
   const inline = (s) =>
     esc(s)
       .replace(/`([^`]+)`/g, '<code>$1</code>')
       .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+
+  const blocks = [];
+  src = src.replace(/```([a-zA-Z0-9_+-]*)\n?([\s\S]*?)(?:```|$)/g, (m, rawLang, code) => {
+    const normalized = rawLang.toLowerCase();
+    const { html, lang } = highlight(code.replace(/\n$/, ''), LANG_ALIASES[normalized] || normalized);
+    const label = LANG_LABELS[lang] || 'Код';
+    blocks.push(
+      `<div class="codeblock">` +
+        `<div class="codeblock__bar">` +
+          `<span class="codeblock__lang">${esc(label)}</span>` +
+          `<button type="button" class="codeblock__copy">Скопировать</button>` +
+        `</div>` +
+        `<pre class="code"><code class="hljs language-${lang || 'plaintext'}">${html}</code></pre>` +
+      `</div>`
+    );
+    return `@@code${blocks.length - 1}@@`;
+  });
 
   let out = '';
   let list = false;

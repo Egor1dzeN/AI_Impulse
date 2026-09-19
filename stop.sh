@@ -10,8 +10,14 @@ stop_port() {
     local pids
     pids=$(netstat -ano 2>/dev/null | grep -E "^ *TCP" | grep -E "[:.]${port}[[:space:]].*LISTENING" | awk '{print $NF}' | sort -u)
     for pid in $pids; do
-        echo "stopping pid=$pid on port $port"
-        taskkill //PID "$pid" //F >/dev/null 2>&1 || true
+        echo "stopping pid=$pid (and its process tree) on port $port"
+        # //T kills the whole process tree, not just the listening pid.
+        # This matters because the backend runs with uvicorn --reload,
+        # which is TWO processes (a reloader that owns the socket, plus a
+        # worker child that actually loads the GPU models) — killing only
+        # the reloader by pid leaves the model-loaded worker running as an
+        # orphan, invisible here and still holding VRAM.
+        taskkill //PID "$pid" //T //F >/dev/null 2>&1 || true
     done
 }
 

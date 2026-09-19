@@ -27,11 +27,18 @@ def _build_enricher(qwen, entity_enricher, grammar_normalizer):
     from subject_resolver import SubjectResolver
     from relation_extractor import RelationExtractor
     from relation_linker import RelationLinker
-    from memory_validator import MemoryValidator
     from enricher import MemoryEnricher
+    from unified_memory_analyzer import UnifiedMemoryAnalyzer
+
+    extractor = MemoryExtractor(qwen)
+
+    analyzer = UnifiedMemoryAnalyzer(
+        qwen=qwen,
+        extractor=extractor,
+    )
 
     return MemoryEnricher(
-        extractor=MemoryExtractor(qwen),
+        extractor=extractor,
         entity_enricher=entity_enricher,
         coreference_resolver=CoreferenceResolver(qwen),
         temporal_enricher=TemporalEnricher(),
@@ -39,8 +46,9 @@ def _build_enricher(qwen, entity_enricher, grammar_normalizer):
         subject_resolver=SubjectResolver(),
         relation_extractor=RelationExtractor(qwen),
         relation_linker=RelationLinker(),
-        validator=MemoryValidator(qwen),
+        validator=None,
         grammar_normalizer=grammar_normalizer,
+        unified_analyzer=analyzer,
     )
 
 
@@ -97,11 +105,11 @@ def update_memory(text: str, user_id: str) -> None:
 
 
 def retrieve_memory_context(query: str, user_id: str, top_k: int = 5) -> str:
-    from memory_context_formatter import MemoryContextFormatter
-
-    hits = get_memory_system().retrieve(query, user_id, top_k=top_k)
-    memories = [hit.memory for hit in hits]
-    return MemoryContextFormatter().format(memories)
+    system = get_memory_system()
+    hits = system.retrieve(query, user_id, top_k)
+    return system.context_formatter.format(
+        [hit.memory for hit in hits]
+    )
 
 
 def list_memories(user_id: str) -> list[dict[str, Any]]:

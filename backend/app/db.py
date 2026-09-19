@@ -71,7 +71,6 @@ CREATE INDEX IF NOT EXISTS idx_weights_user ON weights(user_id, date);
 def _connect() -> sqlite3.Connection:
     conn = sqlite3.connect(str(APP_DB_PATH))
     conn.row_factory = sqlite3.Row
-    conn.execute("PRAGMA foreign_keys = ON")
     return conn
 
 

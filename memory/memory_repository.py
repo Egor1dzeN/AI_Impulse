@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
 from dataclasses import fields, is_dataclass
 from datetime import datetime
 from enum import Enum
@@ -21,44 +22,53 @@ class MemoryRepository:
     def __init__(self, db_path: str | Path = "memory.db") -> None:
         self.db_path = Path(db_path)
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
-        self._connection = sqlite3.connect(str(self.db_path))
+        # This one connection is a long-lived singleton (via memory_bridge's
+        # model registry) reused across FastAPI's threadpool worker threads
+        # and BackgroundTasks — check_same_thread=False lifts sqlite3's
+        # same-thread guard, and the lock serializes access since a raw
+        # connection still isn't safe under concurrent use from multiple
+        # threads at once.
+        self._connection = sqlite3.connect(str(self.db_path), check_same_thread=False)
         self._connection.row_factory = sqlite3.Row
+        self._lock = threading.Lock()
         self._create_schema()
 
     def close(self) -> None:
-        self._connection.close()
+        with self._lock:
+            self._connection.close()
 
     def _create_schema(self) -> None:
-        self._connection.execute(
-            """
-            CREATE TABLE IF NOT EXISTS memories (
-                id TEXT PRIMARY KEY,
-                user_id TEXT NOT NULL,
-                type TEXT NOT NULL,
-                content TEXT NOT NULL,
-                confidence REAL NOT NULL,
-                importance REAL NOT NULL,
-                freshness REAL NOT NULL,
-                status TEXT NOT NULL,
-                sources_json TEXT NOT NULL,
-                created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL,
-                valid_from TEXT,
-                valid_until TEXT,
-                metadata_json TEXT NOT NULL
+        with self._lock:
+            self._connection.execute(
+                """
+                CREATE TABLE IF NOT EXISTS memories (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    type TEXT NOT NULL,
+                    content TEXT NOT NULL,
+                    confidence REAL NOT NULL,
+                    importance REAL NOT NULL,
+                    freshness REAL NOT NULL,
+                    status TEXT NOT NULL,
+                    sources_json TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    valid_from TEXT,
+                    valid_until TEXT,
+                    metadata_json TEXT NOT NULL
+                )
+                """
             )
-            """
-        )
-        self._connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id)"
-        )
-        self._connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status)"
-        )
-        self._connection.execute(
-            "CREATE INDEX IF NOT EXISTS idx_memories_user_status ON memories(user_id, status)"
-        )
-        self._connection.commit()
+            self._connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memories_user ON memories(user_id)"
+            )
+            self._connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memories_status ON memories(status)"
+            )
+            self._connection.execute(
+                "CREATE INDEX IF NOT EXISTS idx_memories_user_status ON memories(user_id, status)"
+            )
+            self._connection.commit()
 
     @staticmethod
     def _datetime_to_json(value: datetime | None) -> str | None:
@@ -147,46 +157,50 @@ class MemoryRepository:
             "valid_until, metadata_json" \
             ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
 
-        self._connection.execute(
-            sql,
-            (
-                memory.id,
-                memory.user_id,
-                memory.type.value,
-                memory.content,
-                float(memory.confidence),
-                float(memory.importance),
-                float(memory.freshness),
-                memory.status.value,
-                self._encode_sources(memory.sources),
-                self._datetime_to_json(memory.created_at),
-                self._datetime_to_json(memory.updated_at),
-                self._datetime_to_json(memory.valid_from),
-                self._datetime_to_json(memory.valid_until),
-                json.dumps(memory.metadata or {}, ensure_ascii=False),
-            ),
-        )
-        self._connection.commit()
+        with self._lock:
+            self._connection.execute(
+                sql,
+                (
+                    memory.id,
+                    memory.user_id,
+                    memory.type.value,
+                    memory.content,
+                    float(memory.confidence),
+                    float(memory.importance),
+                    float(memory.freshness),
+                    memory.status.value,
+                    self._encode_sources(memory.sources),
+                    self._datetime_to_json(memory.created_at),
+                    self._datetime_to_json(memory.updated_at),
+                    self._datetime_to_json(memory.valid_from),
+                    self._datetime_to_json(memory.valid_until),
+                    json.dumps(memory.metadata or {}, ensure_ascii=False),
+                ),
+            )
+            self._connection.commit()
 
     def get(self, memory_id: str) -> Memory | None:
-        row = self._connection.execute(
-            "SELECT * FROM memories WHERE id = ?",
-            (memory_id,),
-        ).fetchone()
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT * FROM memories WHERE id = ?",
+                (memory_id,),
+            ).fetchone()
 
         return None if row is None else self._row_to_memory(row)
 
     def get_all(self) -> list[Memory]:
-        rows = self._connection.execute(
-            "SELECT * FROM memories ORDER BY created_at ASC"
-        ).fetchall()
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT * FROM memories ORDER BY created_at ASC"
+            ).fetchall()
         return [self._row_to_memory(row) for row in rows]
 
     def get_active(self) -> list[Memory]:
-        rows = self._connection.execute(
-            "SELECT * FROM memories WHERE status = ? ORDER BY created_at ASC",
-            (MemoryStatus.ACTIVE.value,),
-        ).fetchall()
+        with self._lock:
+            rows = self._connection.execute(
+                "SELECT * FROM memories WHERE status = ? ORDER BY created_at ASC",
+                (MemoryStatus.ACTIVE.value,),
+            ).fetchall()
         return [self._row_to_memory(row) for row in rows]
 
     def find_by_user(
@@ -194,24 +208,25 @@ class MemoryRepository:
         user_id: str,
         active_only: bool = False,
     ) -> list[Memory]:
-        if active_only:
-            rows = self._connection.execute(
-                """
-                SELECT * FROM memories
-                WHERE user_id = ? AND status = ?
-                ORDER BY created_at ASC
-                """,
-                (user_id, MemoryStatus.ACTIVE.value),
-            ).fetchall()
-        else:
-            rows = self._connection.execute(
-                """
-                SELECT * FROM memories
-                WHERE user_id = ?
-                ORDER BY created_at ASC
-                """,
-                (user_id,),
-            ).fetchall()
+        with self._lock:
+            if active_only:
+                rows = self._connection.execute(
+                    """
+                    SELECT * FROM memories
+                    WHERE user_id = ? AND status = ?
+                    ORDER BY created_at ASC
+                    """,
+                    (user_id, MemoryStatus.ACTIVE.value),
+                ).fetchall()
+            else:
+                rows = self._connection.execute(
+                    """
+                    SELECT * FROM memories
+                    WHERE user_id = ?
+                    ORDER BY created_at ASC
+                    """,
+                    (user_id,),
+                ).fetchall()
 
         return [self._row_to_memory(row) for row in rows]
 
@@ -234,30 +249,34 @@ class MemoryRepository:
 
         sql += " ORDER BY created_at ASC"
 
-        rows = self._connection.execute(sql, tuple(params)).fetchall()
+        with self._lock:
+            rows = self._connection.execute(sql, tuple(params)).fetchall()
         return [self._row_to_memory(row) for row in rows]
 
     def update(self, memory: Memory) -> None:
         self.upsert(memory)
 
     def delete(self, memory_id: str) -> None:
-        cursor = self._connection.execute(
-            "DELETE FROM memories WHERE id = ?",
-            (memory_id,),
-        )
-        self._connection.commit()
+        with self._lock:
+            cursor = self._connection.execute(
+                "DELETE FROM memories WHERE id = ?",
+                (memory_id,),
+            )
+            self._connection.commit()
 
         if cursor.rowcount == 0:
             raise ValueError(f"Memory with id '{memory_id}' does not exist.")
 
     def clear(self) -> None:
-        self._connection.execute("DELETE FROM memories")
-        self._connection.commit()
+        with self._lock:
+            self._connection.execute("DELETE FROM memories")
+            self._connection.commit()
 
     def __len__(self) -> int:
-        row = self._connection.execute(
-            "SELECT COUNT(*) AS count FROM memories"
-        ).fetchone()
+        with self._lock:
+            row = self._connection.execute(
+                "SELECT COUNT(*) AS count FROM memories"
+            ).fetchone()
         return int(row["count"])
 
     @staticmethod

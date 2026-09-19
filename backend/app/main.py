@@ -7,7 +7,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
 from . import agent, db, mcp_tools, memory_bridge, tools
-from .schemas import ChatRequest, MemoryOut
+from .schemas import ChatMessageOut, ChatRequest, MemoryOut, SandboxOut
 
 app = FastAPI(title="Impulse Agent API")
 
@@ -45,7 +45,7 @@ def chat(req: ChatRequest, background_tasks: BackgroundTasks) -> StreamingRespon
     return response
 
 
-@app.get("/api/history/{user_id}")
+@app.get("/api/history/{user_id}", response_model=list[ChatMessageOut])
 def history(user_id: str) -> list[dict]:
     with db.get_conn() as conn:
         rows = conn.execute(
@@ -71,6 +71,6 @@ def memories(user_id: str) -> list[dict]:
     return memory_bridge.list_memories(user_id)
 
 
-@app.get("/api/sandbox/{user_id}")
+@app.get("/api/sandbox/{user_id}", response_model=SandboxOut)
 def sandbox(user_id: str) -> dict:
     return tools.get_sandbox_snapshot(user_id)

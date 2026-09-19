@@ -43,6 +43,22 @@ function Copy({ text }) {
   );
 }
 
+// Code blocks are injected as raw HTML (dangerouslySetInnerHTML), so their
+// copy buttons can't take a React onClick — handle clicks via delegation
+// on the feed container instead.
+function onFeedClick(e) {
+  const btn = e.target.closest('.codeblock__copy');
+  if (!btn) return;
+  const code = btn.closest('.codeblock')?.querySelector('code');
+  if (!code) return;
+  navigator.clipboard.writeText(code.textContent).then(() => {
+    const prev = btn.textContent;
+    btn.textContent = 'Скопировано';
+    clearTimeout(btn._resetTimer);
+    btn._resetTimer = setTimeout(() => { btn.textContent = prev; }, 1600);
+  });
+}
+
 export default function Chat({ messages }) {
   const feedRef = useRef(null);
 
@@ -56,7 +72,15 @@ export default function Chat({ messages }) {
   }, [messages]);
 
   return (
-    <div className="feed" id="feed" ref={feedRef} role="log" aria-live="polite" aria-label="Переписка">
+    <div
+      className="feed"
+      id="feed"
+      ref={feedRef}
+      role="log"
+      aria-live="polite"
+      aria-label="Переписка"
+      onClick={onFeedClick}
+    >
       {messages.map((m) => (
         <div key={m.id} className={`msg msg--${m.role}`}>
           {m.role === 'ai' && <span className="msg__orb" />}

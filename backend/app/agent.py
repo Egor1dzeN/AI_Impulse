@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import date
 from typing import Any, Iterator
 
@@ -15,6 +16,8 @@ from .tools import MEMORY_TOOL_NAME
 # allows roughly 10 rounds of tool calls (memory searches and/or actions)
 # before the graph gives up and we fall back to a canned reply.
 RECURSION_LIMIT = 20
+
+logger = logging.getLogger(__name__)
 
 # A local 4-bit model occasionally hits EOS on the very first generated
 # token (seen right after cold start) and produces a genuinely empty reply.
@@ -89,7 +92,10 @@ def handle_chat_turn_stream(user_id: str, message: str) -> Iterator[dict[str, An
 
         # Nothing was yielded at all this attempt, so a silent retry is
         # invisible to the frontend (still shows "thinking").
-        print(f"[agent] empty reply on attempt {attempt}/{MAX_ATTEMPTS} for user_id={user_id!r}, message={message!r}")
+        logger.warning(
+            "empty reply on attempt %d/%d for user_id=%r, message=%r",
+            attempt, MAX_ATTEMPTS, user_id, message,
+        )
 
     reply = "".join(reply_parts).strip()
     if not reply:

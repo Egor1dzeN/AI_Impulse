@@ -39,23 +39,28 @@ SQLite и FAISS.
 
 ## Быстрый запуск
 
+Никаких `.ps1`-скриптов в проекте больше нет — единственный способ запуска
+«одной командой» — `dev.sh` (Git Bash / MSYS; работает и на Windows, и на
+Linux/macOS). Он же — **debug-запуск с горячей перезагрузкой**: backend и
+frontend оба перезапускаются/подхватывают изменения на лету, без ручного
+перезапуска после каждой правки.
+
 ### Вариант 1 — одной командой (рекомендуется)
-
-В корне проекта есть `dev.ps1` (PowerShell) и его аналог `dev.sh` (Git Bash) —
-оба поднимают backend и frontend, убивают старые процессы на портах
-8001/5173, а при первом запуске сами создают `backend/.venv`, ставят
-зависимости из `requirements.txt` и делают `npm install` во `frontend/`.
-
-```powershell
-powershell -File dev.ps1
-```
 
 ```bash
 ./dev.sh
 ```
 
-Если PowerShell ругается на execution policy, используй `dev.sh` в Git Bash
-либо `powershell -ExecutionPolicy Bypass -File dev.ps1`.
+Убивает всё, что уже слушает порты 8001/5173, при первом запуске сам создаёт
+`backend/.venv`, ставит зависимости из `requirements.txt` и делает
+`npm install` во `frontend/`, затем поднимает оба процесса:
+
+- **backend** — `uvicorn ... --reload --reload-dir app`: изменения в
+  `backend/app/**/*.py` подхватываются автоматически, сервер сам
+  перезапускается;
+- **frontend** — `npm run dev` (Vite): у него из коробки HMR (Hot Module
+  Replacement) — правки в `.jsx`/`.css` применяются в браузере без перезагрузки
+  страницы.
 
 **Первый запуск после клонирования занимает много времени и места** — ставятся
 тяжёлые ML-зависимости (torch, transformers, bitsandbytes, faiss,
@@ -71,33 +76,55 @@ Hub скачает несколько гигабайт весов (Qwen3-4B, д�
 
 Остановить оба процесса:
 
-```powershell
-powershell -File stop.ps1
-```
 ```bash
 ./stop.sh
 ```
 
-### Вариант 2 — вручную, по отдельности
+> **Важно про `memory/`:** правки в пакете `memory/` (он лежит в корне
+> проекта, вне `backend/app/`) **не** подхватываются автоматически — это
+> сделано намеренно. Там же лениво живут тяжёлые модели (Qwen3-4B,
+> эмбеддер, реранкер, GLiNER, ...) в процессе backend'а, и полный перезапуск
+> uvicorn на каждую правку означал бы перезагрузку всех моделей заново.
+> После правок в `memory/` перезапусти `./dev.sh` вручную.
 
-#### Backend (FastAPI + uvicorn, порт 8001)
+### Вариант 2 — по отдельности, в двух терминалах
 
-```powershell
-cd backend
-python -m venv .venv
-.venv\Scripts\pip install -r requirements.txt
-.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload
+Открой два терминала (Git Bash) и в каждом запусти свой скрипт — оба
+работают в foreground, весь лог идёт прямо в тот терминал, где ты их
+запустил (плюс дублируется в `backend_run.log`/`frontend_run.log`), никаких
+дополнительных окон не открывается. Останавливаются через Ctrl+C (или
+`./stop.sh` из третьего терминала).
+
+```bash
+./backend.sh   # первый терминал — FastAPI/uvicorn, порт 8001
 ```
 
-Проверка: http://127.0.0.1:8001/api/health
+```bash
+./frontend.sh  # второй терминал — Vite dev server, порт 5173
+```
 
-#### Frontend (Vite + React, порт 5173)
+Проверка backend'а: http://127.0.0.1:8001/api/health
 
-```powershell
+Оба скрипта при первом запуске сами создают `backend/.venv` /
+ставят зависимости и делают `npm install` во `frontend/`, как и `dev.sh`.
+
+<details>
+<summary>Совсем вручную, без скриптов</summary>
+
+```bash
+cd backend
+python -m venv .venv
+.venv/Scripts/pip install -r requirements.txt
+.venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001 --reload --reload-dir app
+```
+
+```bash
 cd frontend
 npm install
 npm run dev
 ```
+
+</details>
 
 ### Важно
 
@@ -108,9 +135,12 @@ npm run dev
   машине.
 - Первое сообщение в чат будет медленным: все модели (см. ниже) лениво
   загружаются в память процесса при первом обращении (`model_registry.py`,
-  singleton на процесс) и остаются там до перезапуска backend.
+  singleton на процесс) и остаются там до перезапуска backend (в том числе до
+  автоматического рестарта от `--reload`).
 - Без CUDA всё тоже работает, но на CPU (fp32) — очень медленно. Квантование
   (4-bit/8-bit) применяется только при наличии CUDA.
+- `git push`/`git pull` сами по себе ничего не запускают и не перезапускают —
+  в репозитории нет CI/CD или деплоя, это чисто локальный dev-проект.
 
 ---
 
@@ -165,13 +195,23 @@ npm run dev
 переиспользуются между чатом и памятью — это критично, т.к. GPU-память
 ограничена.
 
-| Модель | Роль | Квантование (CUDA) | Файл |
+| Модель | Роль | Устройство по умолчанию | Файл |
 |---|---|---|---|
-| **Qwen/Qwen3-4B** | Диалоговая LLM агента **и** LLM извлечения памяти (`UnifiedMemoryAnalyzer`, coreference, relation extraction, validation) — один и тот же экземпляр, чтобы не грузить модель дважды | 4-bit NF4 + double quant (`bitsandbytes`), можно отключить через `QWEN_4BIT=0` | `memory/qwen_model.py` |
-| **Qwen/Qwen3-Embedding-0.6B** | Би-энкодер для векторного поиска по памяти (эмбеддинги запроса и содержимого memory) | 8-bit LLM.int8() | `memory/memory_embedder.py` |
-| **Qwen/Qwen3-Reranker-0.6B** | Кросс-энкодер, переранжирует кандидатов из FAISS перед выдачей агенту | FP16 (без квантования — стабильность важнее для 0.6B модели) | `memory/memory_reranker.py` |
-| **Qwen/Qwen3-0.6B** | Грамматическая нормализация уже извлечённых формулировок памяти (падежи, согласование) — отдельный маленький вызов пакетом | 8-bit LLM.int8() (кроме `lm_head`) | `memory/memory_grammar_normalizer.py` |
-| **urchade/gliner_multi-v2.1 (GLiNER)** | NER: извлечение сущностей (person/location/organization/…) для обогащения кандидатов памяти | FP16 | `memory/entity_enricher.py` |
+| **Qwen/Qwen3-4B** | Диалоговая LLM агента **и** LLM извлечения памяти (`UnifiedMemoryAnalyzer`, coreference, relation extraction, validation) — один и тот же экземпляр, чтобы не грузить модель дважды | GPU, 4-bit NF4 + double quant (`bitsandbytes`), можно отключить через `QWEN_4BIT=0` | `memory/qwen_model.py` |
+| **Qwen/Qwen3-Embedding-0.6B** | Би-энкодер для векторного поиска по памяти (эмбеддинги запроса и содержимого memory) | GPU, 8-bit LLM.int8() | `memory/memory_embedder.py` |
+| **Qwen/Qwen3-Reranker-0.6B** | Кросс-энкодер, переранжирует кандидатов из FAISS перед выдачей агенту | GPU, FP16 (без квантования — стабильность важнее для 0.6B модели) | `memory/memory_reranker.py` |
+| **Qwen/Qwen3-0.6B** | Грамматическая нормализация уже извлечённых формулировок памяти (падежи, согласование) — отдельный маленький вызов пакетом | **CPU** по умолчанию, FP32 (`GRAMMAR_DEVICE=cuda` — вернуть на GPU, тогда 8-bit LLM.int8() кроме `lm_head`) | `memory/memory_grammar_normalizer.py` |
+| **urchade/gliner_multi-v2.1 (GLiNER)** | NER: извлечение сущностей (person/location/organization/…) для обогащения кандидатов памяти | **CPU** по умолчанию, FP32 (`GLINER_DEVICE=cuda` — вернуть на GPU, тогда FP16) | `memory/entity_enricher.py` |
+
+Грамматический нормализатор и GLiNER намеренно живут на **CPU по умолчанию**:
+оба участвуют только в фоновом пайплайне записи памяти (не в интерактивном
+чате), поэтому их латентность не критична — а вот освобождённые ~1–1.5 ГБ
+VRAM критичны на картах с 8 ГБ, где Qwen3-4B (чат) + эмбеддер + реранкер и
+так занимают почти всё. На своём опыте: на RTX 3070 (8 ГБ) все 5 моделей на
+GPU одновременно оставляли считаные сотни МБ свободными, и `model.generate()`
+чата начинал молча возвращать пустой ответ (см. "Известные ограничения"
+ниже) — после переноса этих двух моделей на CPU свободной VRAM снова
+достаточно для генерации.
 
 `ChatQwen` (`backend/app/chat_model.py`) — это адаптер `langchain_core.BaseChatModel`
 вокруг того же `QwenModel`: Qwen3 нативно не поддерживает structured tool
@@ -189,8 +229,8 @@ calling LangChain, поэтому:
    tool_call блок (тогда токены в чат не льются, ждём весь блок и парсим) или
    обычный текст (тогда льём токены во фронт по мере генерации).
 
-Модель Qwen3-4B грузится **без** `enable_thinking` (thinking-режим отключён)
-для скорости.
+Модель Qwen3-4B генерирует **с** `enable_thinking=True` (thinking-режим включён,
+`chat_model.py`).
 
 ---
 
@@ -598,7 +638,6 @@ backend/
     schemas.py                     — Pydantic-модели запросов/ответов
   mcp_servers.example.json  — шаблон конфига MCP (копировать в mcp_servers.json)
   requirements.txt
-  run_backend.cmd
 
 frontend/
   src/
@@ -631,7 +670,9 @@ memory/                — самостоятельный пакет систе�
   memory_context.py, memory_context_formatter.py           — форматирование для LLM
   qwen_model.py                                              — обёртка над Qwen3-4B
 
-dev.ps1 / dev.sh / stop.ps1 / stop.sh   — скрипты запуска/остановки
+dev.sh                            — debug-запуск обоих сразу (backend в foreground, frontend в фоне)
+backend.sh / frontend.sh          — запуск по отдельности, каждый в своём терминале, foreground
+stop.sh                            — остановка backend/frontend (по портам 8001/5173)
 ```
 
 ---
@@ -644,9 +685,22 @@ dev.ps1 / dev.sh / stop.ps1 / stop.sh   — скрипты запуска/ост
   качество function calling ощутимо ниже, чем у топовых облачных моделей —
   отсюда специальный парсер tool-call блока с фолбэками и ретраем на пустой
   ответ (см. `agent.py`, `chat_model.py`).
-- Вся тяжёлая часть (5 моделей) держится в GPU-памяти одновременно на время
-  жизни backend-процесса — нужен GPU с достаточным запасом VRAM (ориентир:
-  Qwen3-4B в 4-бит + два Qwen3-0.6B + GLiNER + FAISS CPU-индекс).
+- На чат-модель (`QwenModel.generate`/`generate_stream`) в `memory/qwen_model.py`
+  нет обработки исключений внутри генерации: если `model.generate()` упадёт
+  (например, с CUDA out-of-memory), `generate_stream` просто не выдаст ни
+  одного токена — ошибка не пробрасывается наружу и не попадает в лог, а
+  пользователь видит стандартную заглушку "Не получилось получить ответ от
+  модели" ровно как при холодном старте. Если такое повторяется стабильно
+  (не только на первом сообщении после запуска) — в первую очередь проверь
+  `nvidia-smi`, скорее всего не хватает VRAM.
+- Qwen3-4B (чат), Qwen3-Embedding и Qwen3-Reranker держатся в GPU-памяти
+  одновременно на всё время жизни backend-процесса — нужен GPU с достаточным
+  запасом VRAM. GLiNER и грамматический нормализатор по умолчанию на CPU
+  специально для того, чтобы оставить этим трём больше VRAM на картах вроде
+  RTX 3070 (8 ГБ) — если врубить их обратно на GPU (`GLINER_DEVICE=cuda`,
+  `GRAMMAR_DEVICE=cuda`) на такой карте, свободной VRAM для генерации чата
+  может не остаться вообще (проверено на практике: ~300 МБ свободных из 8 ГБ
+  при всех 5 моделях на GPU).
 - Явного управления `importance`/`freshness`/протухания (`expired`) во
   времени пока нет — поля в модели `Memory` существуют, но автоматического
   фонового процесса, который бы их пересчитывал, в коде нет.

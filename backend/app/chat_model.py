@@ -119,7 +119,18 @@ class ChatQwen(BaseChatModel):
     this class (LangGraph's ToolNode, the agent loop) only ever sees
     standard LangChain messages."""
 
-    max_new_tokens: int = 512
+    # Thinking mode + sampling (vs. greedy) noticeably improves this model's
+    # reliability on plain requests — see qwen_model.py's _strip_thinking
+    # for why callers never see the reasoning itself. Thinking eats into the
+    # token budget before the real answer starts, hence the higher cap than
+    # QwenModel's own default (used by the deterministic-extraction call
+    # sites in memory/, which don't set any of this).
+    max_new_tokens: int = 1536
+    enable_thinking: bool = True
+    do_sample: bool = True
+    temperature: float = 0.6
+    top_p: float = 0.95
+    top_k: int = 20
 
     @property
     def _llm_type(self) -> str:
@@ -144,7 +155,16 @@ class ChatQwen(BaseChatModel):
     ) -> ChatResult:
         system_prompt, user_prompt = self._render(messages, kwargs.get("tools") or [])
         qwen = memory_bridge.get_qwen_model()
-        raw = qwen.generate(system_prompt=system_prompt, user_prompt=user_prompt, max_new_tokens=self.max_new_tokens)
+        raw = qwen.generate(
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            max_new_tokens=self.max_new_tokens,
+            enable_thinking=self.enable_thinking,
+            do_sample=self.do_sample,
+            temperature=self.temperature,
+            top_p=self.top_p,
+            top_k=self.top_k,
+        )
         message = _parse_tool_call(raw)
         return ChatResult(generations=[ChatGeneration(message=message)])
 
@@ -170,7 +190,14 @@ class ChatQwen(BaseChatModel):
         flushed = False
 
         for piece in qwen.generate_stream(
-            system_prompt=system_prompt, user_prompt=user_prompt, max_new_tokens=self.max_new_tokens
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            max_new_tokens=self.max_new_tokens,
+            enable_thinking=self.enable_thinking,
+            do_sample=self.do_sample,
+            temperature=self.temperature,
+            top_p=self.top_p,
+            top_k=self.top_k,
         ):
             buffer += piece
             if not decided and len(buffer) >= 4:

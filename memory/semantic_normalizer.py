@@ -4,7 +4,6 @@ import re
 from dataclasses import dataclass
 
 from enricher import EnrichedMemoryCandidate
-from memory_normalizer import MemoryNormalizer
 from models import Memory, MemoryType
 
 
@@ -28,9 +27,6 @@ class SemanticMemory:
 
 class SemanticMemoryNormalizer:
     """Builds a stable semantic key for matching and consolidation."""
-
-    def __init__(self) -> None:
-        self.normalizer = MemoryNormalizer()
 
     @staticmethod
     def normalize_text(text: str) -> str:

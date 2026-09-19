@@ -1,137 +1,3 @@
-# from __future__ import annotations
-#
-# import torch
-# from transformers import (
-#     AutoModelForCausalLM,
-#     AutoTokenizer,
-# )
-#
-#
-# # ============================================================
-# # SHARED QWEN MODEL
-# # ============================================================
-#
-# class QwenModel:
-#
-#     MODEL_NAME = "Qwen/Qwen3-4B"
-#
-#     def __init__(self) -> None:
-#
-#         device = (
-#             "cuda"
-#             if torch.cuda.is_available()
-#             else "cpu"
-#         )
-#
-#         print(
-#             f"Loading {self.MODEL_NAME} on {device}..."
-#         )
-#
-#         self.tokenizer = (
-#             AutoTokenizer.from_pretrained(
-#                 self.MODEL_NAME
-#             )
-#         )
-#
-#         if device == "cuda":
-#
-#             self.model = (
-#                 AutoModelForCausalLM.from_pretrained(
-#                     self.MODEL_NAME,
-#                     dtype=torch.float16,
-#                     device_map="auto",
-#                 )
-#             )
-#
-#         else:
-#
-#             self.model = (
-#                 AutoModelForCausalLM.from_pretrained(
-#                     self.MODEL_NAME,
-#                     dtype=torch.float32,
-#                 )
-#             )
-#
-#         self.device = device
-#
-#     # ========================================================
-#     # GENERATE
-#     # ========================================================
-#
-#     def generate(
-#         self,
-#         system_prompt: str,
-#         user_prompt: str,
-#         max_new_tokens: int = 512,
-#     ) -> str:
-#
-#         messages = [
-#             {
-#                 "role": "system",
-#                 "content": system_prompt,
-#             },
-#             {
-#                 "role": "user",
-#                 "content": user_prompt,
-#             },
-#         ]
-#
-#         inputs = (
-#             self.tokenizer.apply_chat_template(
-#                 messages,
-#                 tokenize=True,
-#                 add_generation_prompt=True,
-#                 enable_thinking=False,
-#                 return_tensors="pt",
-#             )
-#         )
-#
-#         input_ids = inputs["input_ids"]
-#
-#         attention_mask = inputs.get(
-#             "attention_mask"
-#         )
-#
-#         input_device = (
-#             self.model
-#             .get_input_embeddings()
-#             .weight.device
-#         )
-#
-#         input_ids = input_ids.to(
-#             input_device
-#         )
-#
-#         if attention_mask is not None:
-#
-#             attention_mask = (
-#                 attention_mask.to(
-#                     input_device
-#                 )
-#             )
-#
-#         with torch.no_grad():
-#
-#             outputs = self.model.generate(
-#                 input_ids=input_ids,
-#                 attention_mask=attention_mask,
-#                 max_new_tokens=max_new_tokens,
-#                 do_sample=False,
-#                 pad_token_id=(
-#                     self.tokenizer.eos_token_id
-#                 ),
-#             )
-#
-#         generated_tokens = (
-#             outputs[0][input_ids.shape[1]:]
-#         )
-#
-#         response = self.tokenizer.decode(
-#             generated_tokens,
-#             skip_special_tokens=True,
-#         )
-#
-#         return response.strip()
 from __future__ import annotations
 
 import os
@@ -141,6 +7,19 @@ from typing import Iterator
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig, TextIteratorStreamer
+
+_THINK_CLOSE = "</think>"
+
+
+def _strip_thinking(text: str) -> str:
+    """Drop a leading <think>...</think> reasoning block, keeping only the
+    final answer. A no-op when thinking was disabled (nothing to strip) or
+    the model never closed the tag (e.g. cut off by max_new_tokens) — in
+    that case the raw text is returned as-is rather than losing it."""
+    idx = text.find(_THINK_CLOSE)
+    if idx == -1:
+        return text
+    return text[idx + len(_THINK_CLOSE):].lstrip("\n").strip()
 
 
 class QwenModel:
@@ -201,6 +80,11 @@ class QwenModel:
         system_prompt: str,
         user_prompt: str,
         max_new_tokens: int = 512,
+        enable_thinking: bool = False,
+        do_sample: bool = False,
+        temperature: float = 0.6,
+        top_p: float = 0.95,
+        top_k: int = 20,
     ) -> str:
         start = time.perf_counter()
 
@@ -213,7 +97,7 @@ class QwenModel:
             messages,
             tokenize=True,
             add_generation_prompt=True,
-            enable_thinking=False,
+            enable_thinking=enable_thinking,
             return_tensors="pt",
         )
 
@@ -226,15 +110,22 @@ class QwenModel:
         if attention_mask is not None:
             attention_mask = attention_mask.to(input_device)
 
+        generation_kwargs = dict(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_new_tokens=max_new_tokens,
+            do_sample=do_sample,
+            use_cache=True,
+            pad_token_id=self.tokenizer.eos_token_id,
+        )
+        # Qwen recommends sampling (not greedy) whenever thinking is on —
+        # greedy decoding tends to repeat/degenerate on this model family.
+        # HF warns if temperature/top_p/top_k are passed with do_sample=False.
+        if do_sample:
+            generation_kwargs.update(temperature=temperature, top_p=top_p, top_k=top_k)
+
         with torch.no_grad():
-            outputs = self.model.generate(
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_new_tokens=max_new_tokens,
-                do_sample=False,
-                use_cache=True,
-                pad_token_id=self.tokenizer.eos_token_id,
-            )
+            outputs = self.model.generate(**generation_kwargs)
 
         generated_tokens = outputs[0][input_ids.shape[1]:]
         response = self.tokenizer.decode(
@@ -252,13 +143,18 @@ class QwenModel:
         )
         print(f"[QWEN] response: {response!r}")
 
-        return response
+        return _strip_thinking(response)
 
     def generate_stream(
         self,
         system_prompt: str,
         user_prompt: str,
         max_new_tokens: int = 512,
+        enable_thinking: bool = False,
+        do_sample: bool = False,
+        temperature: float = 0.6,
+        top_p: float = 0.95,
+        top_k: int = 20,
     ) -> Iterator[str]:
         """Same as `generate`, but yields text pieces as they're produced
         instead of returning the full response at once."""
@@ -271,7 +167,7 @@ class QwenModel:
             messages,
             tokenize=True,
             add_generation_prompt=True,
-            enable_thinking=False,
+            enable_thinking=enable_thinking,
             return_tensors="pt",
         )
 
@@ -294,24 +190,52 @@ class QwenModel:
             input_ids=input_ids,
             attention_mask=attention_mask,
             max_new_tokens=max_new_tokens,
-            do_sample=False,
+            do_sample=do_sample,
             use_cache=True,
             pad_token_id=self.tokenizer.eos_token_id,
             streamer=streamer,
         )
+        if do_sample:
+            generation_kwargs.update(temperature=temperature, top_p=top_p, top_k=top_k)
 
         start = time.perf_counter()
         thread = Thread(target=self.model.generate, kwargs=generation_kwargs)
         thread.start()
 
+        # When thinking is on, the model's own <think>...</think> block is
+        # part of the generated text (unlike the disabled case, where the
+        # chat template bakes an already-closed empty block into the PROMPT
+        # instead, so it never reaches this streamer at all). Buffer pieces
+        # until the closing tag shows up and only yield what comes after —
+        # callers should see the final answer, not the raw reasoning.
+        in_thinking = enable_thinking
+        pending = ""
+
         new_tokens = 0
         full_text_parts: list[str] = []
         for piece in streamer:
             full_text_parts.append(piece)
-            if piece:
-                new_tokens += 1
+            if not piece:
+                continue
+            new_tokens += 1
+            if not in_thinking:
                 yield piece
+                continue
+            pending += piece
+            idx = pending.find(_THINK_CLOSE)
+            if idx != -1:
+                in_thinking = False
+                remainder = pending[idx + len(_THINK_CLOSE):].lstrip("\n")
+                pending = ""
+                if remainder:
+                    yield remainder
         thread.join()
+
+        # Generation ended without ever closing <think> (e.g. max_new_tokens
+        # hit mid-thought) — better to surface the partial text than drop
+        # the whole reply.
+        if in_thinking and pending:
+            yield pending
 
         elapsed = time.perf_counter() - start
         allocated, reserved = self._gpu_memory()

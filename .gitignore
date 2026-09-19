@@ -2,7 +2,6 @@
 .idea
 /backend/.venv
 /backend/data/**
-/backend/data/memory_index
 **/__pycache__/
 *.pyc
 *.pid

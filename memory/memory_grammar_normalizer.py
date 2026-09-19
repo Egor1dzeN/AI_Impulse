@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import re
 
 import torch
@@ -12,10 +13,21 @@ from transformers import (
 
 
 class MemoryGrammarNormalizer:
-    """Grammar normalization with a mild 8-bit Qwen3-0.6B backend."""
+    """Grammar normalization with a mild 8-bit Qwen3-0.6B backend.
+
+    Runs on CPU by default: it only does one batched pass over already
+    extracted candidates in the background memory-write pipeline (never the
+    interactive chat path), so its latency matters far less than leaving
+    GPU VRAM free for the chat model — important on smaller cards where
+    five resident models (chat LLM + embedder + reranker + GLiNER +
+    grammar normalizer) can otherwise leave too little VRAM for the chat
+    model's own generation and make it fail silently. Set
+    GRAMMAR_DEVICE=cuda to put it back on GPU if you have room to spare.
+    """
 
     MODEL_NAME = "Qwen/Qwen3-0.6B"
     USE_8BIT = True
+    DEFAULT_DEVICE = os.getenv("GRAMMAR_DEVICE", "cpu").strip().lower()
 
     PROMPT = """
 Ты — компонент исправления грамматики для долговременной памяти пользователя.
@@ -82,9 +94,10 @@ class MemoryGrammarNormalizer:
         device: str | None = None,
     ) -> None:
         self.model_name = model_name
-        self.device = device or (
-            "cuda"
-            if torch.cuda.is_available()
+        requested = device or self.DEFAULT_DEVICE
+        self.device = (
+            requested
+            if requested != "cuda" or torch.cuda.is_available()
             else "cpu"
         )
         self.quantized = False

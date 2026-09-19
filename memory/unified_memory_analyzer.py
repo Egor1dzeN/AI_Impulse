@@ -348,9 +348,9 @@ class UnifiedMemoryAnalyzer:
         candidates: list[MemoryCandidate],
     ) -> list[MemoryCandidate]:
         low_value_patterns = (
-            r"\bвремени\s+(?:немного|мало)\\b",
-            r"\bвремени\s+не хватает\\b",
-            r"\bсейчас\s+много\s+дел\\b",
+            r"\bвремени\s+(?:немного|мало)\b",
+            r"\bвремени\s+не хватает\b",
+            r"\bсейчас\s+много\s+дел\b",
         )
 
         result: list[MemoryCandidate] = []
@@ -371,7 +371,7 @@ class UnifiedMemoryAnalyzer:
 
         if candidate.type == MemoryType.PROCEDURE:
             explicit_preference = re.search(
-                r"\b(люблю|нравится|предпочитаю|предпочитает|любит)\\b",
+                r"\b(люблю|нравится|предпочитаю|предпочитает|любит)\b",
                 content,
             )
             if explicit_preference:
@@ -379,7 +379,7 @@ class UnifiedMemoryAnalyzer:
 
         if candidate.type == MemoryType.PREFERENCE:
             goal_markers = re.search(
-                r"\b(хочу|хочет|планирую|планирует|собираюсь|собирается|намерен|намерена)\\b",
+                r"\b(хочу|хочет|планирую|планирует|собираюсь|собирается|намерен|намерена)\b",
                 content,
             )
             if goal_markers:

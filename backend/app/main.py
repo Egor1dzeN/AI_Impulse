@@ -146,6 +146,11 @@ def add_memory(req: AddMemoryRequest, user_id: str = Depends(auth.get_current_us
     return {"status": "ok"}
 
 
+@app.post("/api/memories/dream")
+def dream_memories(user_id: str = Depends(auth.get_current_user_id)) -> dict:
+    return memory_bridge.force_dream(user_id)
+
+
 @app.delete("/api/memories/{memory_id}")
 def delete_memory(memory_id: str, user_id: str = Depends(auth.get_current_user_id)) -> dict:
     try:

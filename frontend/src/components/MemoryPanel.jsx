@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { addMemory, deleteMemory, fetchMemories, fetchSandbox, searchMemories } from '../lib/api';
+import { addMemory, deleteMemory, dreamMemories, fetchMemories, fetchSandbox, searchMemories } from '../lib/api';
 
 const TYPE_LABELS = {
   fact: 'Факт',
@@ -24,6 +24,8 @@ export default function MemoryPanel({ open, onClose }) {
   const [searchResults, setSearchResults] = useState(null);
   const [searching, setSearching] = useState(false);
   const [searchError, setSearchError] = useState('');
+  const [dreaming, setDreaming] = useState(false);
+  const [dreamSummary, setDreamSummary] = useState('');
 
   function loadMemories() {
     return fetchMemories().then(setMemories);
@@ -81,6 +83,21 @@ export default function MemoryPanel({ open, onClose }) {
     setSearchError('');
   }
 
+  async function runDream() {
+    if (dreaming) return;
+    setDreaming(true);
+    setDreamSummary('');
+    try {
+      const result = await dreamMemories();
+      setDreamSummary(result.summary);
+      if (result.merged.length) await loadMemories();
+    } catch {
+      setDreamSummary('Не получилось обработать память. Попробуйте ещё раз.');
+    } finally {
+      setDreaming(false);
+    }
+  }
+
   async function removeMemory(id) {
     setRemovingId(id);
     try {
@@ -106,7 +123,19 @@ export default function MemoryPanel({ open, onClose }) {
         {loading && <p className="memory-panel__hint">Загрузка…</p>}
 
         <section>
-          <h3>Что ассистент запомнил о вас</h3>
+          <div className="memory-panel__section-head">
+            <h3>Что ассистент запомнил о вас</h3>
+            <button
+              type="button"
+              className="ghost"
+              onClick={runDream}
+              disabled={dreaming}
+              title="Найти и объединить дубликаты/противоречия среди всех фактов"
+            >
+              {dreaming ? 'Обрабатываю…' : 'Осмыслить'}
+            </button>
+          </div>
+          {dreamSummary && <p className="memory-panel__hint">{dreamSummary}</p>}
 
           <form className="memory-add" onSubmit={submitNewFact}>
             <input

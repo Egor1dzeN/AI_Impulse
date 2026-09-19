@@ -84,6 +84,10 @@ export function searchMemories(query) {
   }).then(json);
 }
 
+export function dreamMemories() {
+  return fetch(`${BASE}/api/memories/dream`, { method: 'POST', headers: authHeaders() }).then(json);
+}
+
 export function deleteMemory(memoryId) {
   return fetch(`${BASE}/api/memories/${memoryId}`, {
     method: 'DELETE',

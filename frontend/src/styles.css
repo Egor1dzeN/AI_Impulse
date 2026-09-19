@@ -747,6 +747,15 @@ body.is-chat .dock{ transform:none }
   margin:0 0 10px;
 }
 
+.memory-panel__section-head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  margin-bottom:10px;
+}
+.memory-panel__section-head h3{ margin:0 }
+
 .memory-add{
   display:flex;
   gap:8px;

@@ -2,12 +2,23 @@ from __future__ import annotations
 
 import json
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from . import agent, db, mcp_tools, memory_bridge, tools
-from .schemas import ChatMessageOut, ChatRequest, MemoryOut, SandboxOut
+from . import agent, auth, conversations, db, mcp_tools, memory_bridge, tools
+from .schemas import (
+    AddMemoryRequest,
+    ChatMessageOut,
+    ChatRequest,
+    ConversationOut,
+    GoogleLoginRequest,
+    LoginRequest,
+    MemoryOut,
+    RegisterRequest,
+    SandboxOut,
+    TokenOut,
+)
 
 app = FastAPI(title="Impulse Agent API")
 
@@ -30,28 +41,76 @@ def health() -> dict:
     return {"status": "ok"}
 
 
+@app.post("/api/auth/register", response_model=TokenOut)
+def register(req: RegisterRequest) -> dict:
+    _, token = auth.register_user(req.username, req.password)
+    return {"access_token": token}
+
+
+@app.post("/api/auth/login", response_model=TokenOut)
+def login(req: LoginRequest) -> dict:
+    _, token = auth.login_user(req.username, req.password)
+    return {"access_token": token}
+
+
+@app.post("/api/auth/google", response_model=TokenOut)
+def google_login(req: GoogleLoginRequest) -> dict:
+    claims = auth.verify_google_id_token(req.id_token)
+    _, token = auth.login_or_register_google_user(
+        google_id=claims["sub"],
+        email=claims.get("email", ""),
+        name=claims.get("name"),
+    )
+    return {"access_token": token}
+
+
+@app.post("/api/conversations", response_model=ConversationOut)
+def create_conversation(user_id: str = Depends(auth.get_current_user_id)) -> dict:
+    return conversations.create_conversation(user_id)
+
+
+@app.get("/api/conversations", response_model=list[ConversationOut])
+def list_conversations(user_id: str = Depends(auth.get_current_user_id)) -> list[dict]:
+    return conversations.list_conversations(user_id)
+
+
+@app.delete("/api/conversations/{conversation_id}")
+def delete_conversation(conversation_id: str, user_id: str = Depends(auth.get_current_user_id)) -> dict:
+    conversations.delete_conversation(conversation_id, user_id)
+    return {"status": "ok"}
+
+
 @app.post("/api/chat")
-def chat(req: ChatRequest, background_tasks: BackgroundTasks) -> StreamingResponse:
+def chat(
+    req: ChatRequest,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(auth.get_current_user_id),
+) -> StreamingResponse:
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="empty message")
 
+    conversations.assert_owned(req.conversation_id, user_id)
+
     def event_stream():
-        for event in agent.handle_chat_turn_stream(req.user_id, req.message):
+        for event in agent.handle_chat_turn_stream(
+            user_id, req.conversation_id, req.message, enable_thinking=req.enable_thinking
+        ):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     response = StreamingResponse(event_stream(), media_type="text/event-stream")
-    background_tasks.add_task(agent.extract_memory_background, req.user_id, req.message)
+    background_tasks.add_task(agent.extract_memory_background, user_id, req.message)
     response.background = background_tasks
     return response
 
 
-@app.get("/api/history/{user_id}", response_model=list[ChatMessageOut])
-def history(user_id: str) -> list[dict]:
+@app.get("/api/history", response_model=list[ChatMessageOut])
+def history(conversation_id: str, user_id: str = Depends(auth.get_current_user_id)) -> list[dict]:
+    conversations.assert_owned(conversation_id, user_id)
     with db.get_conn() as conn:
         rows = conn.execute(
             "SELECT id, role, content, action_json, created_at FROM chat_messages "
-            "WHERE user_id = ? ORDER BY created_at ASC",
-            (user_id,),
+            "WHERE conversation_id = ? ORDER BY rowid ASC",
+            (conversation_id,),
         ).fetchall()
 
     return [
@@ -66,11 +125,28 @@ def history(user_id: str) -> list[dict]:
     ]
 
 
-@app.get("/api/memories/{user_id}", response_model=list[MemoryOut])
-def memories(user_id: str) -> list[dict]:
+@app.get("/api/memories", response_model=list[MemoryOut])
+def memories(user_id: str = Depends(auth.get_current_user_id)) -> list[dict]:
     return memory_bridge.list_memories(user_id)
 
 
-@app.get("/api/sandbox/{user_id}", response_model=SandboxOut)
-def sandbox(user_id: str) -> dict:
+@app.post("/api/memories")
+def add_memory(req: AddMemoryRequest, user_id: str = Depends(auth.get_current_user_id)) -> dict:
+    if not req.content.strip():
+        raise HTTPException(status_code=400, detail="empty content")
+    memory_bridge.update_memory(req.content, user_id)
+    return {"status": "ok"}
+
+
+@app.delete("/api/memories/{memory_id}")
+def delete_memory(memory_id: str, user_id: str = Depends(auth.get_current_user_id)) -> dict:
+    try:
+        memory_bridge.delete_memory(memory_id, user_id)
+    except ValueError:
+        raise HTTPException(status_code=404, detail="memory not found")
+    return {"status": "ok"}
+
+
+@app.get("/api/sandbox", response_model=SandboxOut)
+def sandbox(user_id: str = Depends(auth.get_current_user_id)) -> dict:
     return tools.get_sandbox_snapshot(user_id)

@@ -6,8 +6,35 @@ from pydantic import BaseModel
 
 
 class ChatRequest(BaseModel):
-    user_id: str
+    conversation_id: str
     message: str
+    enable_thinking: bool = True
+
+
+class ConversationOut(BaseModel):
+    id: str
+    title: str
+    created_at: str
+    updated_at: str
+
+
+class RegisterRequest(BaseModel):
+    username: str
+    password: str
+
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class GoogleLoginRequest(BaseModel):
+    id_token: str
+
+
+class TokenOut(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
 
 
 class ChatMessageOut(BaseModel):
@@ -16,6 +43,10 @@ class ChatMessageOut(BaseModel):
     content: str
     action: dict[str, Any] | None = None
     created_at: str
+
+
+class AddMemoryRequest(BaseModel):
+    content: str
 
 
 class MemoryOut(BaseModel):

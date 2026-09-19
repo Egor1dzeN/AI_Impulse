@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import xml.etree.ElementTree as ET
 from collections import defaultdict
 from typing import Any
 
+import requests
 from langchain_core.tools import BaseTool, tool
 
 from . import db, memory_bridge
@@ -139,6 +141,154 @@ def get_health_summary_impl(user_id: str) -> dict[str, Any]:
 
 
 # ============================================================
+# TOPIC 4 — MAPS & LOCATION
+# ============================================================
+
+NOMINATIM_URL = "https://nominatim.openstreetmap.org/search"
+# Nominatim's usage policy requires a real identifying User-Agent, not the
+# default python-requests one, or it may reject/throttle requests.
+NOMINATIM_USER_AGENT = "ImpulseAssistant/1.0 (personal project; contact via GitHub)"
+
+
+def geocode_location_impl(place: str) -> dict[str, Any]:
+    resp = requests.get(
+        NOMINATIM_URL,
+        params={"q": place, "format": "json", "limit": 1},
+        headers={"User-Agent": NOMINATIM_USER_AGENT},
+        timeout=8,
+    )
+    resp.raise_for_status()
+    results = resp.json()
+
+    if not results:
+        return {"found": False, "query": place}
+
+    hit = results[0]
+    south, north, west, east = (float(x) for x in hit["boundingbox"])
+
+    return {
+        "found": True,
+        "query": place,
+        "display_name": hit["display_name"],
+        "lat": float(hit["lat"]),
+        "lon": float(hit["lon"]),
+        "bbox": f"{west},{south},{east},{north}",
+    }
+
+
+# ============================================================
+# TOPIC 5 — WEATHER
+# ============================================================
+
+OPEN_METEO_URL = "https://api.open-meteo.com/v1/forecast"
+
+# WMO weather codes, as used by Open-Meteo. https://open-meteo.com/en/docs
+_WEATHER_CODE_DESCRIPTIONS = {
+    0: "ясно",
+    1: "преимущественно ясно",
+    2: "переменная облачность",
+    3: "пасмурно",
+    45: "туман",
+    48: "изморозь",
+    51: "лёгкая морось",
+    53: "морось",
+    55: "сильная морось",
+    56: "лёгкая ледяная морось",
+    57: "сильная ледяная морось",
+    61: "небольшой дождь",
+    63: "дождь",
+    65: "сильный дождь",
+    66: "лёгкий ледяной дождь",
+    67: "сильный ледяной дождь",
+    71: "небольшой снег",
+    73: "снег",
+    75: "сильный снег",
+    77: "снежная крупа",
+    80: "небольшой ливень",
+    81: "ливень",
+    82: "сильный ливень",
+    85: "небольшой снегопад",
+    86: "сильный снегопад",
+    95: "гроза",
+    96: "гроза с небольшим градом",
+    99: "гроза с сильным градом",
+}
+
+
+def get_weather_impl(place: str) -> dict[str, Any]:
+    # Reuses the same geocoder as show_map — one place name -> coords path.
+    location = geocode_location_impl(place)
+    if not location["found"]:
+        return {"found": False, "query": place}
+
+    resp = requests.get(
+        OPEN_METEO_URL,
+        params={
+            "latitude": location["lat"],
+            "longitude": location["lon"],
+            "current": "temperature_2m,apparent_temperature,relative_humidity_2m,weather_code,wind_speed_10m",
+            "timezone": "auto",
+        },
+        timeout=8,
+    )
+    resp.raise_for_status()
+    current = resp.json().get("current", {})
+
+    return {
+        "found": True,
+        "place": location["display_name"],
+        "temperature_c": current.get("temperature_2m"),
+        "feels_like_c": current.get("apparent_temperature"),
+        "humidity_percent": current.get("relative_humidity_2m"),
+        "wind_speed_kmh": current.get("wind_speed_10m"),
+        "description": _WEATHER_CODE_DESCRIPTIONS.get(current.get("weather_code"), "неизвестно"),
+        "time": current.get("time"),
+    }
+
+
+# ============================================================
+# TOPIC 6 — FINANCE & CURRENCY
+# ============================================================
+
+CBR_DAILY_URL = "https://www.cbr.ru/scripts/XML_daily.asp"
+CBR_USER_AGENT = "ImpulseAssistant/1.0 (personal project; contact via GitHub)"
+
+
+def get_exchange_rate_impl(currency: str) -> dict[str, Any]:
+    """Today's official CBR (Central Bank of Russia) rate for `currency` vs
+    RUB. No date param exposed to the LLM on purpose — always the latest
+    published rate, one less argument for a small model to get wrong."""
+    currency = currency.strip().upper()
+
+    resp = requests.get(
+        CBR_DAILY_URL,
+        headers={"User-Agent": CBR_USER_AGENT},
+        timeout=8,
+    )
+    resp.raise_for_status()
+
+    # The feed is windows-1251, not UTF-8 — parsing raw bytes lets
+    # ElementTree read the encoding from the XML prolog itself instead of
+    # requests guessing (and getting it wrong).
+    root = ET.fromstring(resp.content)
+    rate_date = root.get("Date")
+
+    for valute in root.findall("Valute"):
+        char_code = valute.findtext("CharCode")
+        if char_code and char_code.upper() == currency:
+            return {
+                "found": True,
+                "currency": char_code,
+                "name": valute.findtext("Name"),
+                "nominal": int(valute.findtext("Nominal", "1")),
+                "value_rub": float(valute.findtext("Value", "0").replace(",", ".")),
+                "date": rate_date,
+            }
+
+    return {"found": False, "currency": currency, "date": rate_date}
+
+
+# ============================================================
 # LANGCHAIN TOOLS — bound to one user_id, handed to the LangGraph agent
 # ============================================================
 #
@@ -197,7 +347,33 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
         """Получить сводку по калориям за сегодня и динамике веса."""
         return get_health_summary_impl(user_id=user_id)
 
-    return [create_task, list_tasks, add_expense, get_expense_summary, log_meal, log_weight, get_health_summary]
+    @tool
+    def show_map(place: str) -> dict:
+        """Показать место на карте прямо в чате. Вызывай ТОЛЬКО когда пользователь явно просит показать карту или спрашивает "где находится X" — простое упоминание места в разговоре (например "я живу в X") не повод её вызывать. place — только реальное название места. Если пользователь не назвал место явно (например "покажи на карте где я живу") — сначала вызови search_memory, чтобы узнать место из памяти, и передай сюда именно то, что она вернула, слово в слово. Никогда не придумывай и не дописывай место от себя — если в памяти его нет, не вызывай эту функцию, а спроси пользователя. После вызова не добавляй в ответ данные из других функций (погоду, курс и т.п.), если их не просили."""
+        return geocode_location_impl(place)
+
+    @tool
+    def get_weather(place: str) -> dict:
+        """Узнать текущую погоду в указанном месте. Вызывай ТОЛЬКО когда пользователь явно спрашивает о погоде ("какая погода", "холодно ли", "нужен зонт" и т.п.) — простое упоминание места в разговоре (например "я живу в X", "еду в X") не повод её вызывать. place — только реальное название места. Если пользователь спрашивает о погоде, но не назвал место явно (например "какая у меня погода") — сначала вызови search_memory, чтобы узнать место из памяти, и передай сюда именно то, что она вернула. Никогда не придумывай место от себя."""
+        return get_weather_impl(place)
+
+    @tool
+    def get_exchange_rate(currency: str) -> dict:
+        """Узнать официальный курс ЦБ РФ валюты к рублю на сегодня. Вызывай ТОЛЬКО когда пользователь явно спрашивает про курс/сколько стоит валюта — простое упоминание валюты в разговоре (например "зарплата в долларах") не повод её вызывать. currency — трёхбуквенный код валюты (например USD, EUR, CNY)."""
+        return get_exchange_rate_impl(currency)
+
+    return [
+        create_task,
+        list_tasks,
+        add_expense,
+        get_expense_summary,
+        log_meal,
+        log_weight,
+        get_health_summary,
+        show_map,
+        get_weather,
+        get_exchange_rate,
+    ]
 
 
 def build_memory_tool(user_id: str) -> BaseTool:

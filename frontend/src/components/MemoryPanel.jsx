@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { fetchMemories, fetchSandbox } from '../lib/api';
+import { addMemory, deleteMemory, fetchMemories, fetchSandbox } from '../lib/api';
 
 const TYPE_LABELS = {
   fact: 'Факт',
@@ -12,24 +12,57 @@ const TYPE_LABELS = {
   procedure: 'Процедура',
 };
 
-export default function MemoryPanel({ open, userId, onClose }) {
+export default function MemoryPanel({ open, onClose }) {
   const [memories, setMemories] = useState([]);
   const [sandbox, setSandbox] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [newFact, setNewFact] = useState('');
+  const [adding, setAdding] = useState(false);
+  const [addError, setAddError] = useState('');
+  const [removingId, setRemovingId] = useState(null);
+
+  function loadMemories() {
+    return fetchMemories().then(setMemories);
+  }
 
   useEffect(() => {
     if (!open) return;
     setLoading(true);
-    Promise.all([fetchMemories(userId), fetchSandbox(userId)])
-      .then(([mem, sb]) => {
-        setMemories(mem);
-        setSandbox(sb);
-      })
+    Promise.all([loadMemories(), fetchSandbox().then(setSandbox)])
       .catch(() => {})
       .finally(() => setLoading(false));
-  }, [open, userId]);
+  }, [open]);
 
   if (!open) return null;
+
+  async function submitNewFact(e) {
+    e.preventDefault();
+    const text = newFact.trim();
+    if (!text || adding) return;
+    setAdding(true);
+    setAddError('');
+    try {
+      await addMemory(text);
+      setNewFact('');
+      await loadMemories();
+    } catch {
+      setAddError('Не получилось добавить. Попробуйте ещё раз.');
+    } finally {
+      setAdding(false);
+    }
+  }
+
+  async function removeMemory(id) {
+    setRemovingId(id);
+    try {
+      await deleteMemory(id);
+      setMemories((prev) => prev.filter((m) => m.id !== id));
+    } catch {
+      // leave it in place if the delete failed
+    } finally {
+      setRemovingId(null);
+    }
+  }
 
   return (
     <div className="memory-panel">
@@ -44,14 +77,40 @@ export default function MemoryPanel({ open, userId, onClose }) {
 
         <section>
           <h3>Что ассистент запомнил о вас</h3>
+
+          <form className="memory-add" onSubmit={submitNewFact}>
+            <input
+              type="text"
+              placeholder="Добавить факт о себе…"
+              value={newFact}
+              onChange={(e) => setNewFact(e.target.value)}
+              disabled={adding}
+            />
+            <button type="submit" className="ghost" disabled={adding || !newFact.trim()}>
+              {adding ? 'Добавляю…' : 'Добавить'}
+            </button>
+          </form>
+          {addError && <p className="memory-panel__hint memory-panel__hint--error">{addError}</p>}
+
           {memories.length === 0 && !loading && (
-            <p className="memory-panel__hint">Пока ничего — напишите что-нибудь о себе в чате.</p>
+            <p className="memory-panel__hint">Пока ничего — напишите что-нибудь о себе в чате или добавьте вручную.</p>
           )}
           <ul className="memory-list">
             {memories.map((m) => (
               <li key={m.id}>
                 <span className="memory-list__type">{TYPE_LABELS[m.type] || m.type}</span>
-                {m.content}
+                <span className="memory-list__content">{m.content}</span>
+                <button
+                  type="button"
+                  className="memory-list__remove"
+                  aria-label="Удалить факт"
+                  disabled={removingId === m.id}
+                  onClick={() => removeMemory(m.id)}
+                >
+                  <svg viewBox="0 0 16 16" aria-hidden="true">
+                    <path d="M4 4l8 8M12 4l-8 8" />
+                  </svg>
+                </button>
               </li>
             ))}
           </ul>

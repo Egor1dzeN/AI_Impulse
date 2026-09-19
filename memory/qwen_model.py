@@ -13,12 +13,16 @@ _THINK_CLOSE = "</think>"
 
 def _strip_thinking(text: str) -> str:
     """Drop a leading <think>...</think> reasoning block, keeping only the
-    final answer. A no-op when thinking was disabled (nothing to strip) or
-    the model never closed the tag (e.g. cut off by max_new_tokens) — in
-    that case the raw text is returned as-is rather than losing it."""
+    final answer. A no-op when thinking was disabled (nothing to strip —
+    the tag is simply absent). If the model never closed the tag (e.g. it
+    got stuck in a degenerate reasoning loop and hit max_new_tokens before
+    producing a real answer), return "" rather than dumping the raw
+    reasoning on the caller — callers already treat an empty response as a
+    failed generation and retry/fall back accordingly, which is far better
+    UX than showing a wall of unfinished chain-of-thought."""
     idx = text.find(_THINK_CLOSE)
     if idx == -1:
-        return text
+        return "" if "<think>" in text else text
     return text[idx + len(_THINK_CLOSE):].lstrip("\n").strip()
 
 
@@ -231,11 +235,15 @@ class QwenModel:
                     yield remainder
         thread.join()
 
-        # Generation ended without ever closing <think> (e.g. max_new_tokens
-        # hit mid-thought) — better to surface the partial text than drop
-        # the whole reply.
+        # Generation ended without ever closing <think> — the model got
+        # stuck reasoning (e.g. a degenerate repetition loop) and never
+        # reached a real answer before hitting max_new_tokens. Swallow the
+        # raw reasoning instead of dumping it on the user: yielding nothing
+        # here makes this look like an empty reply to the caller, which
+        # already retries once and then falls back to a clean message —
+        # much better than a wall of unfinished chain-of-thought.
         if in_thinking and pending:
-            yield pending
+            print("[QWEN stream] generation ended without closing <think>, discarding raw reasoning")
 
         elapsed = time.perf_counter() - start
         allocated, reserved = self._gpu_memory()

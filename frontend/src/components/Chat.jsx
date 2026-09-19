@@ -9,10 +9,12 @@ const ACTION_LABELS = {
   list_tasks: 'Список задач',
   get_expense_summary: 'Сводка трат',
   get_health_summary: 'Сводка по здоровью',
+  get_weather: 'Погода',
+  get_exchange_rate: 'Курс валюты',
 };
 
 function ActionBadge({ action }) {
-  if (!action) return null;
+  if (!action || action.tool === 'show_map') return null;
   const label = ACTION_LABELS[action.tool] || action.tool;
   return (
     <div className="action-badge">
@@ -20,6 +22,33 @@ function ActionBadge({ action }) {
         <path d="M3 8.5 6.2 11.7 13 4.5" />
       </svg>
       {label}
+    </div>
+  );
+}
+
+function MapEmbed({ action }) {
+  if (!action || action.tool !== 'show_map') return null;
+  const result = action.result;
+  if (!result) return null;
+
+  if (!result.found) {
+    return <p className="map-embed__miss">Не нашёл «{result.query}» на карте.</p>;
+  }
+
+  const { bbox, lat, lon, display_name } = result;
+  const src = `https://www.openstreetmap.org/export/embed.html?bbox=${bbox}&marker=${lat}%2C${lon}&layer=mapnik`;
+  const bigMapHref = `https://www.openstreetmap.org/?mlat=${lat}&mlon=${lon}#map=12/${lat}/${lon}`;
+
+  return (
+    <div className="map-embed">
+      <iframe
+        src={src}
+        title={display_name}
+        referrerPolicy="no-referrer-when-downgrade"
+      />
+      <a className="map-embed__link" href={bigMapHref} target="_blank" rel="noreferrer">
+        {display_name}
+      </a>
     </div>
   );
 }
@@ -59,7 +88,7 @@ function onFeedClick(e) {
   });
 }
 
-export default function Chat({ messages }) {
+export default function Chat({ messages, scrollSignal, smoothScrollSignal }) {
   const feedRef = useRef(null);
 
   useEffect(() => {
@@ -70,6 +99,30 @@ export default function Chat({ messages }) {
     const pinned = main.scrollHeight - main.scrollTop - main.clientHeight < 60;
     if (pinned) main.scrollTop = main.scrollHeight;
   }, [messages]);
+
+  // Sending a message should always jump to the bottom, even if the user
+  // had scrolled up to read earlier history — unlike incoming AI tokens
+  // above, this is a deliberate action and the "pinned" check shouldn't
+  // gate it.
+  useEffect(() => {
+    if (!scrollSignal) return;
+    const el = feedRef.current;
+    if (!el) return;
+    const main = el.closest('.main');
+    if (!main) return;
+    main.scrollTop = main.scrollHeight;
+  }, [scrollSignal]);
+
+  // Loaded chat history on page load — ease down to the latest message
+  // instead of snapping, so it reads as a deliberate "catching you up".
+  useEffect(() => {
+    if (!smoothScrollSignal) return;
+    const el = feedRef.current;
+    if (!el) return;
+    const main = el.closest('.main');
+    if (!main) return;
+    main.scrollTo({ top: main.scrollHeight, behavior: 'smooth' });
+  }, [smoothScrollSignal]);
 
   return (
     <div
@@ -84,21 +137,28 @@ export default function Chat({ messages }) {
       {messages.map((m) => (
         <div key={m.id} className={`msg msg--${m.role}`}>
           {m.role === 'ai' && <span className="msg__orb" />}
-          <div className="msg__body">
-            {m.role === 'ai' && m.status === 'thinking' ? (
-              <div className="dots"><i /><i /><i /></div>
-            ) : m.role === 'ai' ? (
-              <div
-                dangerouslySetInnerHTML={{
-                  __html: md(m.content) + (m.status === 'revealing' ? '<span class="caret"></span>' : ''),
-                }}
-              />
-            ) : (
+          {m.role === 'you' ? (
+            <div className="msg__body">
               <p>{m.content}</p>
-            )}
-          </div>
-          {m.role === 'ai' && m.status === 'done' && <ActionBadge action={m.action} />}
-          {m.role === 'ai' && m.status === 'done' && <Copy text={m.content} />}
+            </div>
+          ) : (
+            <div className="msg__content">
+              <div className="msg__body">
+                {m.status === 'thinking' ? (
+                  <div className="dots"><i /><i /><i /></div>
+                ) : (
+                  <div
+                    dangerouslySetInnerHTML={{
+                      __html: md(m.content) + (m.status === 'revealing' ? '<span class="caret"></span>' : ''),
+                    }}
+                  />
+                )}
+              </div>
+              {m.status === 'done' && <MapEmbed action={m.action} />}
+              {m.status === 'done' && <ActionBadge action={m.action} />}
+              {m.status === 'done' && <Copy text={m.content} />}
+            </div>
+          )}
         </div>
       ))}
     </div>

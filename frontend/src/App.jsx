@@ -1,9 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import OrbCanvas from './components/OrbCanvas';
 import Chat from './components/Chat';
 import Composer from './components/Composer';
 import MemoryPanel from './components/MemoryPanel';
-import { fetchHistory, getUserId, sendChat } from './lib/api';
+import ChatList from './components/ChatList';
+import Menu from './components/Menu';
+import Login from './components/Login';
+import { createConversation, fetchConversations, fetchHistory, sendChat } from './lib/api';
+import { getUsername, isAuthenticated, logout } from './lib/auth';
+import { getReasoningEnabled, setReasoningEnabled } from './lib/settings';
 import './styles.css';
 
 const CHIPS = [
@@ -16,13 +21,18 @@ const CHIPS = [
 const uid = () => Math.random().toString(36).slice(2);
 
 export default function App() {
-  const [userId] = useState(getUserId);
+  const [authed, setAuthed] = useState(isAuthenticated);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [isChat, setIsChat] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
+  const [chatListOpen, setChatListOpen] = useState(false);
+  const [conversationId, setConversationId] = useState(null);
   const [historyLoaded, setHistoryLoaded] = useState(false);
+  const [sendTick, setSendTick] = useState(0);
+  const [historyScrollTick, setHistoryScrollTick] = useState(0);
+  const [reasoning, setReasoning] = useState(getReasoningEnabled);
 
   const orbRef = useRef(null);
   const mainRef = useRef(null);
@@ -31,31 +41,42 @@ export default function App() {
   const controllerRef = useRef(null);
 
   useEffect(() => {
-    fetchHistory(userId)
-      .then((rows) => {
-        if (rows.length) {
-          setMessages(
-            rows.map((r) => ({
-              id: r.id,
-              role: r.role === 'user' ? 'you' : 'ai',
-              content: r.content,
-              status: 'done',
-              action: r.action,
-            }))
-          );
-          setIsChat(true);
-        }
+    if (!authed) return;
+    fetchConversations()
+      .then((list) => {
+        if (!list.length) return;
+        const latest = list[0];
+        setConversationId(latest.id);
+        return fetchHistory(latest.id).then((rows) => {
+          if (rows.length) {
+            setMessages(
+              rows.map((r) => ({
+                id: r.id,
+                role: r.role === 'user' ? 'you' : 'ai',
+                content: r.content,
+                status: 'done',
+                action: r.action,
+              }))
+            );
+            setIsChat(true);
+            setHistoryScrollTick((t) => t + 1);
+          }
+        });
       })
       .catch(() => {})
       .finally(() => setHistoryLoaded(true));
-  }, [userId]);
+  }, [authed]);
 
   useEffect(() => {
     lift(true);
     window.addEventListener('resize', () => lift(true));
   }, []);
 
-  useEffect(() => {
+  // Must run before Chat's own effects (which force-scroll on send) so the
+  // feed is already visible/laid out by the time they read scrollHeight —
+  // layout effects across the tree flush before any regular effects do,
+  // unlike a plain useEffect here which Chat's child effect would beat.
+  useLayoutEffect(() => {
     document.body.classList.toggle('is-chat', isChat);
     if (!isChat) lift(true);
   }, [isChat]);
@@ -94,6 +115,7 @@ export default function App() {
     if (!isChat) setIsChat(true);
 
     setMessages((prev) => [...prev, { id: uid(), role: 'you', content: text, status: 'done' }]);
+    setSendTick((t) => t + 1);
     setInput('');
     setBusy(true);
     orbRef.current?.setEnergy(1);
@@ -109,7 +131,13 @@ export default function App() {
     let action = null;
 
     try {
-      await sendChat(userId, text, controller.signal, (event) => {
+      let convId = conversationId;
+      if (!convId) {
+        const conv = await createConversation();
+        convId = conv.id;
+        setConversationId(convId);
+      }
+      await sendChat(convId, text, controller.signal, (event) => {
         if (abortedRef.current) return;
         if (event.type === 'token') {
           acc += event.text;
@@ -117,7 +145,7 @@ export default function App() {
         } else if (event.type === 'done') {
           action = event.action;
         }
-      });
+      }, reasoning);
       if (abortedRef.current) {
         setMessages((prev) => prev.filter((m) => m.id !== aiId));
         return;
@@ -125,6 +153,12 @@ export default function App() {
       updateMessage(aiId, { content: acc, status: 'done', action });
     } catch (err) {
       if (!abortedRef.current) {
+        if (String(err.message).startsWith('401')) {
+          logout();
+          setAuthed(false);
+          setMessages((prev) => prev.filter((m) => m.id !== aiId));
+          return;
+        }
         updateMessage(aiId, {
           content: 'Не получилось получить ответ. Проверьте, что бэкенд запущен.',
           status: 'done',
@@ -143,11 +177,66 @@ export default function App() {
     orbRef.current?.setEnergy(0);
   }
 
-  function reset() {
+  function startNewChat() {
+    // Already on a blank, unsaved chat — nothing to reset.
+    if (!conversationId && messages.length === 0) return;
+
     abortedRef.current = true;
+    controllerRef.current?.abort();
     setMessages([]);
     setIsChat(false);
     setBusy(false);
+    // No DB row yet — created lazily by send() on the first real message,
+    // so idle clicks on "Новый чат" don't litter the list with empties.
+    setConversationId(null);
+  }
+
+  async function switchConversation(id) {
+    if (id === conversationId) return;
+    abortedRef.current = true;
+    controllerRef.current?.abort();
+    setBusy(false);
+    setConversationId(id);
+    try {
+      const rows = await fetchHistory(id);
+      setMessages(
+        rows.map((r) => ({
+          id: r.id,
+          role: r.role === 'user' ? 'you' : 'ai',
+          content: r.content,
+          status: 'done',
+          action: r.action,
+        }))
+      );
+      setIsChat(true);
+      setHistoryScrollTick((t) => t + 1);
+    } catch {
+      // leave whatever was on screen if the switch failed
+    }
+  }
+
+  function handleConversationDeleted(id) {
+    if (id === conversationId) startNewChat();
+  }
+
+  function toggleReasoning() {
+    setReasoning((prev) => {
+      const next = !prev;
+      setReasoningEnabled(next);
+      return next;
+    });
+  }
+
+  function signOut() {
+    logout();
+    setAuthed(false);
+    setMessages([]);
+    setIsChat(false);
+    setConversationId(null);
+  }
+
+  if (!authed) {
+    return <Login onAuthed={() => setAuthed(true)} />;
   }
 
   return (
@@ -155,15 +244,30 @@ export default function App() {
       <header className="bar">
         <div className="mark" id="mark">Impulse</div>
         <div className="bar__right">
+          <button className="ghost" type="button" onClick={() => setChatListOpen(true)}>
+            Чаты
+          </button>
           <button className="ghost" type="button" onClick={() => setMemoryOpen(true)}>
             Память
           </button>
-          {isChat && (
-            <button className="ghost" id="reset" type="button" onClick={reset}>
-              <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>
-              Новый чат
-            </button>
-          )}
+          <button className="ghost" id="reset" type="button" onClick={startNewChat}>
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>
+            Новый чат
+          </button>
+          <Menu
+            className="menu--account"
+            button={(toggle) => (
+              <button className="ghost" type="button" onClick={toggle}>
+                <svg viewBox="0 0 16 16" aria-hidden="true">
+                  <circle cx="8" cy="5.5" r="2.7" />
+                  <path d="M2.8 13.5a5.2 5.2 0 0 1 10.4 0" />
+                </svg>
+                {getUsername() || 'Аккаунт'}
+              </button>
+            )}
+          >
+            <button type="button" className="menu__item" onClick={signOut}>Выйти</button>
+          </Menu>
         </div>
       </header>
 
@@ -186,12 +290,28 @@ export default function App() {
           </section>
         )}
 
-        <Chat messages={messages} />
+        <Chat messages={messages} scrollSignal={sendTick} smoothScrollSignal={historyScrollTick} />
       </main>
 
-      <Composer value={input} onChange={setInput} onSend={send} onStop={stop} busy={busy} />
+      <Composer
+        value={input}
+        onChange={setInput}
+        onSend={send}
+        onStop={stop}
+        busy={busy}
+        reasoning={reasoning}
+        onToggleReasoning={toggleReasoning}
+      />
 
-      <MemoryPanel open={memoryOpen} userId={userId} onClose={() => setMemoryOpen(false)} />
+      <MemoryPanel open={memoryOpen} onClose={() => setMemoryOpen(false)} />
+
+      <ChatList
+        open={chatListOpen}
+        activeId={conversationId}
+        onSelect={switchConversation}
+        onDeleted={handleConversationDeleted}
+        onClose={() => setChatListOpen(false)}
+      />
     </>
   );
 }

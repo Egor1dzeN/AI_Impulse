@@ -18,6 +18,12 @@ if str(MEMORY_DIR) not in sys.path:
 _lock = Lock()
 _system = None
 
+_repo_lock = Lock()
+_repository = None
+
+_index_manager_lock = Lock()
+_index_manager = None
+
 
 def _build_enricher(qwen, entity_enricher, grammar_normalizer):
     from extractor_contextual import MemoryExtractor
@@ -92,6 +98,62 @@ def get_memory_system():
     return _system
 
 
+def _get_repository():
+    """Lazily build just the SQLite repository — no ML models involved.
+
+    Listing memories is a plain SELECT and shouldn't have to wait for the
+    full model stack (Qwen3-4B + GLiNER + grammar normalizer + embedder +
+    reranker, ~14GB) that get_memory_system() loads for enrichment/search.
+    Safe to run alongside the full system: MemoryRepository is just a
+    sqlite3 connection to the same file, and SQLite handles that fine.
+    """
+    global _repository
+    if _repository is not None:
+        return _repository
+
+    with _repo_lock:
+        if _repository is not None:
+            return _repository
+
+        from memory_repository import MemoryRepository
+
+        _repository = MemoryRepository(str(DATA_DIR / "memory.db"))
+
+    return _repository
+
+
+def _get_lightweight_index_manager():
+    """Lazily build a MemoryIndexManager backed by just the embedder — no
+    Qwen3-4B, GLiNER or grammar normalizer. delete()'s FAISS rebuild only
+    ever re-embeds existing memory content, it never runs extraction, so it
+    doesn't need the enrichment side of the stack.
+
+    Only used when the full system hasn't been built yet in this process —
+    see delete_memory(). Loading all 5 models at once (as delete used to,
+    via get_memory_system()) was observed to raise MemoryError on this
+    machine, on top of being needless for a delete+reindex.
+    """
+    global _index_manager
+    if _index_manager is not None:
+        return _index_manager
+
+    with _index_manager_lock:
+        if _index_manager is not None:
+            return _index_manager
+
+        from memory_embedder import Qwen3Embedder
+        from faiss_memory_index import FaissMemoryIndex
+        from memory_index_manager import MemoryIndexManager
+
+        embedder = Qwen3Embedder()
+        index = FaissMemoryIndex(dimension=embedder.dimension, index_dir=str(DATA_DIR / "memory_index"))
+        manager = MemoryIndexManager(repository=_get_repository(), embedder=embedder, index=index)
+        manager.ensure_ready()
+        _index_manager = manager
+
+    return _index_manager
+
+
 def get_qwen_model():
     """Return the same shared Qwen3-4B instance used for memory extraction,
     so the chat LLM never loads a second copy of the model into VRAM."""
@@ -112,8 +174,31 @@ def retrieve_memory_context(query: str, user_id: str, top_k: int = 5) -> str:
     )
 
 
+def delete_memory(memory_id: str, user_id: str) -> None:
+    # If the full system is already loaded (e.g. a chat already ran in this
+    # process), route through it so its own in-memory FAISS index stays
+    # consistent — that index only reflects disk state as of when it was
+    # last loaded/rebuilt, so rebuilding via a second, separate index
+    # manager here would leave the full system's copy silently stale for
+    # search_memory. Only take the lightweight path when nothing heavy has
+    # loaded yet, so a bare delete doesn't force it to.
+    if _system is not None:
+        _system.delete(memory_id, user_id)
+        return
+
+    repo = _get_repository()
+    memory = repo.get(memory_id)
+    if memory is None:
+        raise ValueError(f"Memory with id '{memory_id}' does not exist.")
+    if memory.user_id != user_id:
+        raise ValueError("Memory does not belong to the specified user.")
+
+    repo.delete(memory_id)
+    _get_lightweight_index_manager().rebuild()
+
+
 def list_memories(user_id: str) -> list[dict[str, Any]]:
-    memories = get_memory_system().get_all(user_id)
+    memories = _get_repository().find_by_user(user_id=user_id, active_only=False)
     return [
         {
             "id": m.id,

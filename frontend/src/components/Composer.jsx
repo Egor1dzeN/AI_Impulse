@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 
-export default function Composer({ value, onChange, onSend, onStop, busy }) {
+export default function Composer({ value, onChange, onSend, onStop, busy, reasoning, onToggleReasoning }) {
   const inputRef = useRef(null);
 
   const grow = () => {
@@ -60,6 +60,18 @@ export default function Composer({ value, onChange, onSend, onStop, busy }) {
             <svg viewBox="0 0 20 20" aria-hidden="true">
               <path d="M13.5 7.5 8.2 12.8a2 2 0 0 0 2.8 2.8l5.7-5.7a3.7 3.7 0 0 0-5.2-5.2L5.2 10.9a5.4 5.4 0 0 0 7.6 7.6" />
             </svg>
+          </button>
+          <button
+            className={`ghost composer__reasoning${reasoning ? ' ghost--active' : ''}`}
+            type="button"
+            onClick={onToggleReasoning}
+            title={reasoning ? 'Размышления включены — ответы медленнее, но точнее' : 'Размышления выключены — ответы быстрее'}
+          >
+            <svg viewBox="0 0 16 16" aria-hidden="true">
+              <path d="M8 2a4.5 4.5 0 0 0-2.5 8.24V12h5v-1.76A4.5 4.5 0 0 0 8 2Z" />
+              <path d="M6.5 14h3" />
+            </svg>
+            Размышления
           </button>
           <span className="hint">Enter — отправить, Shift+Enter — новая строка</span>
           {!busy ? (

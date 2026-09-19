@@ -16,3 +16,8 @@ protobuf
 langchain-core
 langgraph
 langchain-mcp-adapters
+pyjwt
+passlib[bcrypt]
+bcrypt==4.0.1
+google-auth
+requests

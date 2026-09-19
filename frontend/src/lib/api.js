@@ -1,14 +1,12 @@
 // Relative — Vite's dev server proxies /api to the backend (see
 // vite.config.js), so this works both on localhost and through a tunnel.
+import { getToken } from './auth';
+
 const BASE = '';
 
-export function getUserId() {
-  let id = localStorage.getItem('impulse_user_id');
-  if (!id) {
-    id = crypto.randomUUID();
-    localStorage.setItem('impulse_user_id', id);
-  }
-  return id;
+function authHeaders(extra = {}) {
+  const token = getToken();
+  return token ? { ...extra, Authorization: `Bearer ${token}` } : extra;
 }
 
 async function json(res) {
@@ -16,11 +14,11 @@ async function json(res) {
   return res.json();
 }
 
-export async function sendChat(userId, message, signal, onEvent) {
+export async function sendChat(conversationId, message, signal, onEvent, enableThinking = true) {
   const res = await fetch(`${BASE}/api/chat`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ user_id: userId, message }),
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ conversation_id: conversationId, message, enable_thinking: enableThinking }),
     signal,
   });
   if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
@@ -49,14 +47,44 @@ export async function sendChat(userId, message, signal, onEvent) {
   }
 }
 
-export function fetchHistory(userId) {
-  return fetch(`${BASE}/api/history/${userId}`).then(json);
+export function fetchHistory(conversationId) {
+  return fetch(`${BASE}/api/history?conversation_id=${conversationId}`, { headers: authHeaders() }).then(json);
 }
 
-export function fetchMemories(userId) {
-  return fetch(`${BASE}/api/memories/${userId}`).then(json);
+export function createConversation() {
+  return fetch(`${BASE}/api/conversations`, { method: 'POST', headers: authHeaders() }).then(json);
 }
 
-export function fetchSandbox(userId) {
-  return fetch(`${BASE}/api/sandbox/${userId}`).then(json);
+export function fetchConversations() {
+  return fetch(`${BASE}/api/conversations`, { headers: authHeaders() }).then(json);
+}
+
+export function deleteConversation(conversationId) {
+  return fetch(`${BASE}/api/conversations/${conversationId}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  }).then(json);
+}
+
+export function fetchMemories() {
+  return fetch(`${BASE}/api/memories`, { headers: authHeaders() }).then(json);
+}
+
+export function addMemory(content) {
+  return fetch(`${BASE}/api/memories`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ content }),
+  }).then(json);
+}
+
+export function deleteMemory(memoryId) {
+  return fetch(`${BASE}/api/memories/${memoryId}`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  }).then(json);
+}
+
+export function fetchSandbox() {
+  return fetch(`${BASE}/api/sandbox`, { headers: authHeaders() }).then(json);
 }

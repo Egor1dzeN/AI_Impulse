@@ -21,9 +21,9 @@ def build_tool_list(user_id: str) -> list[BaseTool]:
     return [memory_tool, *action_tools, *mcp_tools.get_cached_mcp_tools()]
 
 
-def build_graph(user_id: str) -> CompiledStateGraph:
+def build_graph(user_id: str, enable_thinking: bool = True) -> CompiledStateGraph:
     all_tools = build_tool_list(user_id)
-    llm_with_tools = ChatQwen().bind_tools(all_tools)
+    llm_with_tools = ChatQwen(enable_thinking=enable_thinking).bind_tools(all_tools)
 
     def agent_node(state: MessagesState) -> dict:
         result = llm_with_tools.invoke(state["messages"])

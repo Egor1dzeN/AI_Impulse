@@ -8,7 +8,7 @@ from typing import Any, Iterator
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.errors import GraphRecursionError
 
-from . import agent_graph, db, memory_bridge
+from . import agent_graph, conversations, db, memory_bridge
 from .prompts import build_system_prompt
 from .tools import MEMORY_TOOL_NAME
 
@@ -26,8 +26,66 @@ logger = logging.getLogger(__name__)
 # falling back to a canned message.
 MAX_ATTEMPTS = 2
 
+# How many of the most recent saved messages (both roles combined) to feed
+# back in as short-term conversational context, on top of whatever the
+# agent pulls from long-term memory via search_memory. Kept small since
+# this is a local model — every extra message lengthens the prompt and
+# slows generation.
+HISTORY_MESSAGE_LIMIT = 10
 
-def handle_chat_turn_stream(user_id: str, message: str) -> Iterator[dict[str, Any]]:
+# Tools whose replies are cheap to re-fetch and easy for a small model to
+# latch onto: seeing its own "Сегодня в Сиднее +18°C..." sitting right in
+# context strongly biases it to repeat/rehash that instead of reasoning
+# about the new message (confirmed in practice — tightening the prompt
+# alone didn't stop it). Replies driven by these tools are swapped out for
+# a neutral placeholder in short-term history so there's nothing tempting
+# to copy; the real content is untouched in the DB and still shown to the
+# user, this only affects what the model sees on the *next* turn.
+_VOLATILE_INFO_TOOLS = {"get_weather", "get_exchange_rate", "show_map"}
+
+
+def _load_recent_history(user_id: str, conversation_id: str) -> list[HumanMessage | AIMessage]:
+    # Order by rowid, not created_at: two messages saved in quick succession
+    # (e.g. the user's message and the assistant's reply right after it) can
+    # land on the same millisecond-resolution timestamp on Windows, which
+    # made created_at-based ordering nondeterministic. rowid is SQLite's
+    # own monotonically-increasing insertion order, so it's always correct.
+    # Scoped to conversation_id too — otherwise switching chats would leak
+    # unrelated context from a different conversation into the model.
+    with db.get_conn() as conn:
+        rows = conn.execute(
+            "SELECT role, content, action_json FROM ("
+            "  SELECT role, content, action_json, rowid FROM chat_messages "
+            "  WHERE user_id = ? AND conversation_id = ? ORDER BY rowid DESC LIMIT ?"
+            ") ORDER BY rowid ASC",
+            (user_id, conversation_id, HISTORY_MESSAGE_LIMIT),
+        ).fetchall()
+
+    history: list[HumanMessage | AIMessage] = []
+    for row in rows:
+        if row["role"] == "user":
+            history.append(HumanMessage(content=row["content"]))
+            continue
+
+        tool_name = None
+        if row["action_json"]:
+            try:
+                tool_name = json.loads(row["action_json"]).get("tool")
+            except json.JSONDecodeError:
+                pass
+
+        if tool_name in _VOLATILE_INFO_TOOLS:
+            content = f"[Ответ был получен через вызов {tool_name} — не повторяй эти данные, если не спросят снова]"
+        else:
+            content = row["content"]
+        history.append(AIMessage(content=content))
+
+    return history
+
+
+def handle_chat_turn_stream(
+    user_id: str, conversation_id: str, message: str, enable_thinking: bool = True
+) -> Iterator[dict[str, Any]]:
     """Run one chat turn through the LangGraph agent, yielding incremental
     events as it works:
     {"type": "token", "text": ...} for live reply text,
@@ -37,12 +95,20 @@ def handle_chat_turn_stream(user_id: str, message: str) -> Iterator[dict[str, An
       `action` is the last non-memory tool call executed (or None).
 
     The agent decides for itself, per turn, whether it needs to consult
-    memory (via the search_memory tool) and how many times to query it
-    before answering — no memory context is fetched up front.
+    long-term memory (via the search_memory tool) and how many times to
+    query it before answering — no long-term memory context is fetched up
+    front. Short-term context is different: the last HISTORY_MESSAGE_LIMIT
+    messages saved under this conversation_id are always prepended, so the
+    model sees recent back-and-forth directly rather than only through
+    extracted facts — long-term memory is user-wide (spans conversations),
+    this short-term history is scoped to just this one conversation.
     """
-    graph = agent_graph.build_graph(user_id)
+    graph = agent_graph.build_graph(user_id, enable_thinking=enable_thinking)
     system_prompt = build_system_prompt(today=date.today().isoformat())
-    inputs = {"messages": [SystemMessage(content=system_prompt), HumanMessage(content=message)]}
+    history = _load_recent_history(user_id, conversation_id)
+    inputs = {
+        "messages": [SystemMessage(content=system_prompt), *history, HumanMessage(content=message)],
+    }
     config = {"recursion_limit": RECURSION_LIMIT}
 
     reply_parts: list[str] = []
@@ -106,8 +172,9 @@ def handle_chat_turn_stream(user_id: str, message: str) -> Iterator[dict[str, An
         )
         yield {"type": "token", "text": reply}
 
-    _save_message(user_id, "user", message, None)
-    _save_message(user_id, "assistant", reply, last_action)
+    _save_message(user_id, conversation_id, "user", message, None)
+    _save_message(user_id, conversation_id, "assistant", reply, last_action)
+    conversations.touch_and_maybe_title(conversation_id, message)
 
     yield {"type": "done", "action": last_action}
 
@@ -121,14 +188,18 @@ def _parse_tool_result(content: Any) -> Any:
     return content
 
 
-def _save_message(user_id: str, role: str, content: str, action: dict | None) -> None:
+def _save_message(
+    user_id: str, conversation_id: str, role: str, content: str, action: dict | None
+) -> None:
     with db.get_conn() as conn:
         conn.execute(
-            "INSERT INTO chat_messages (id, user_id, role, content, action_json, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "INSERT INTO chat_messages "
+            "(id, user_id, conversation_id, role, content, action_json, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?)",
             (
                 db.new_id(),
                 user_id,
+                conversation_id,
                 role,
                 content,
                 json.dumps(action, ensure_ascii=False) if action else None,

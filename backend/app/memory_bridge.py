@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 import sys
 from pathlib import Path
 from threading import Lock
@@ -94,6 +93,7 @@ def get_memory_system():
             db_path=str(DATA_DIR / "memory.db"),
             index_dir=str(DATA_DIR / "memory_index"),
             retrieval_models=retrieval_models,
+            qwen=qwen,
         )
 
     return _system
@@ -221,118 +221,11 @@ def search_memories(query: str, user_id: str, top_k: int = 5) -> list[dict[str, 
     ]
 
 
-_DREAM_PROMPT = """Ты анализируешь список сохранённых фактов о пользователе и ищешь ЯВНЫЕ дубликаты и противоречия.
-
-Дубликат — два факта говорят одно и то же, возможно разными словами.
-Противоречие — два факта не могут быть верны одновременно (например разные города проживания).
-Факты идут от старых к новым.
-
-Верни JSON-массив действий, без какого-либо текста вокруг. Для каждой найденной пары:
-{{"keep_id": "id факта, который оставить (обычно более новый)", "remove_ids": ["id", "..."], "reason": "коротко почему"}}
-
-Если дубликатов и противоречий нет — верни пустой массив [].
-Используй ТОЛЬКО id из списка ниже, слово в слово. Никогда не придумывай id.
-
-Факты:
-{items}"""
-
-
-def _parse_json_array(text: str) -> list:
-    text = text.strip()
-    if text.startswith("```"):
-        lines = text.split("\n")
-        if lines and lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].strip() == "```":
-            lines = lines[:-1]
-        text = "\n".join(lines).strip()
-
-    start = text.find("[")
-    end = text.rfind("]")
-    if start < 0 or end < start:
-        return []
-
-    try:
-        data = json.loads(text[start:end + 1])
-    except json.JSONDecodeError:
-        return []
-
-    return data if isinstance(data, list) else []
-
-
 def force_dream(user_id: str) -> dict[str, Any]:
-    """Batch memory consolidation ("dreaming"): review all of a user's
-    active memories together in one LLM pass and merge obvious duplicates /
-    resolve contradictions that incremental per-message consolidation
-    (MemoryConsolidator, which only ever compares one new candidate against
-    its single best match) can miss.
-
-    Deliberately conservative given how unreliable a small local model can
-    be at free-form batch judgment calls (seen repeatedly with tool
-    arguments elsewhere in this app): the model may only reference ids it
-    was actually shown — anything else is silently dropped rather than
-    trusted — and "removed" memories are marked SUPERSEDED, never hard
-    deleted, so a bad merge is always recoverable.
-    """
-    from datetime import datetime as _datetime
-
-    from models import MemoryStatus
-
-    system = get_memory_system()
-    memories = system.repository.find_by_user(user_id=user_id, active_only=True)
-    memories.sort(key=lambda m: m.created_at or _datetime.min)
-
-    if len(memories) < 2:
-        return {"merged": [], "summary": "Недостаточно записей для анализа."}
-
-    known_ids = {m.id for m in memories}
-    items = "\n".join(f"{m.id}: {m.content}" for m in memories)
-
-    qwen = get_qwen_model()
-    response = qwen.generate(
-        system_prompt="Отвечай только валидным JSON, без пояснений.",
-        user_prompt=_DREAM_PROMPT.format(items=items),
-        max_new_tokens=512,
-    )
-    actions = _parse_json_array(response)
-
-    merged: list[dict[str, Any]] = []
-    for action in actions:
-        if not isinstance(action, dict):
-            continue
-
-        keep_id = action.get("keep_id")
-        remove_ids = action.get("remove_ids")
-        reason = str(action.get("reason") or "")
-
-        if keep_id not in known_ids or not isinstance(remove_ids, list):
-            continue
-
-        applied_ids = [
-            rid for rid in remove_ids
-            if isinstance(rid, str) and rid in known_ids and rid != keep_id
-        ]
-        if not applied_ids:
-            continue
-
-        for rid in applied_ids:
-            memory = system.repository.get(rid)
-            if memory is None or memory.user_id != user_id:
-                continue
-            memory.status = MemoryStatus.SUPERSEDED
-            system.repository.update(memory)
-
-        merged.append({"keep_id": keep_id, "removed_ids": applied_ids, "reason": reason})
-
-    if merged:
-        system.index_manager.rebuild()
-
-    summary = (
-        f"Объединено записей: {sum(len(m['removed_ids']) for m in merged)}."
-        if merged
-        else "Дубликатов и противоречий не найдено."
-    )
-    return {"merged": merged, "summary": summary}
+    """Thin wrapper — the actual batch-consolidation logic lives on
+    MemorySystem itself (memory/memory_system.py::force_dream), alongside
+    update/retrieve/delete/get_all, rather than reimplemented here."""
+    return get_memory_system().force_dream(user_id)
 
 
 def list_memories(user_id: str) -> list[dict[str, Any]]:

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
+from dreaming_engine import DreamingEngine
 from enricher import MemoryEnricher
 from faiss_memory_index import FaissMemoryIndex
 from memory_consolidator import MemoryConsolidator
@@ -28,7 +30,11 @@ class MemorySystem:
         db_path: str | Path = "memory.db",
         index_dir: str | Path = "memory_index",
         retrieval_models: RetrievalModelManager | None = None,
+        qwen: Any = None,
     ) -> None:
+        # Only force_dream() needs raw generation access — everything else
+        # goes through the enricher/retrieval_models it already has.
+        self.qwen = qwen
         self.repository = MemoryRepository(db_path)
         self.store = PersistentMemoryStore(self.repository)
 
@@ -78,6 +84,10 @@ class MemorySystem:
 
         self.context_formatter = MemoryContextFormatter()
         self.cheap_memory_router = CheapMemoryRouter()
+
+        # every_n_memories=0 disables the periodic auto-trigger — only
+        # force_dream() invokes it for now, nothing calls notify_memory_changes.
+        self.dreaming_engine = DreamingEngine(store=self.store, qwen=qwen, every_n_memories=0)
 
     # =========================================================
     # PUBLIC API
@@ -132,6 +142,52 @@ class MemorySystem:
 
         self.repository.delete(memory_id)
         self.index_manager.rebuild()
+
+    def force_dream(self, user_id: str) -> dict[str, Any]:
+        """Batch memory consolidation ("dreaming"): review all of a user's
+        active memories together in one LLM pass, merging obvious
+        duplicates into a compacted record and archiving explicitly
+        superseded/cancelled/completed ones — the kind of cleanup
+        incremental per-message consolidation (matcher+consolidator, which
+        only ever compares one new candidate against its single best match)
+        can't do on its own.
+
+        Delegates to DreamingEngine (dreaming_engine.py), which is strict
+        about it: an archive is only honored if the model's own stated
+        reason contains an explicit obsolescence marker AND is backed by
+        matching semantic scope/relations (or an explicit marker in the
+        memory's own text) — "unrelated to another memory's topic" alone
+        is never accepted as a reason. Nothing is ever hard deleted, only
+        marked ARCHIVED, and expired memories (valid_until in the past) are
+        archived deterministically before the LLM is even involved.
+        """
+        if self.qwen is None:
+            raise RuntimeError("force_dream() requires a qwen model — construct MemorySystem with qwen=...")
+
+        result = self.dreaming_engine.force_run(user_id)
+
+        merged = [
+            {"keep_id": op.keep_id, "removed_ids": op.archive_ids, "reason": op.reason}
+            for op in result.merge_operations
+        ]
+        archived = [
+            {"ids": op.memory_ids, "reason": op.reason}
+            for op in result.archive_operations
+        ]
+
+        if result.summary:
+            summary = result.summary
+        elif merged or archived:
+            parts = []
+            if merged:
+                parts.append(f"объединено записей: {sum(len(m['removed_ids']) for m in merged)}")
+            if archived:
+                parts.append(f"архивировано: {sum(len(a['ids']) for a in archived)}")
+            summary = ", ".join(parts).capitalize() + "."
+        else:
+            summary = "Дубликатов и противоречий не найдено."
+
+        return {"merged": merged, "archived": archived, "summary": summary}
 
     def clear(self, user_id: str) -> None:
         """Delete all memories of the specified user."""

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+from datetime import datetime
 from pathlib import Path
 from typing import Any
+import uuid
 
 from dreaming_engine import DreamingEngine
 from enricher import MemoryEnricher
@@ -18,6 +20,7 @@ from memory_updater import MemoryUpdater
 from persistent_memory_store import PersistentMemoryStore
 from retrieval_model_manager import RetrievalModelManager
 from cheap_memory_router import CheapMemoryRouter
+from models import Memory, MemoryStatus, MemoryType
 
 
 class MemorySystem:
@@ -35,11 +38,11 @@ class MemorySystem:
         # Only force_dream() needs raw generation access — everything else
         # goes through the enricher/retrieval_models it already has.
         self.qwen = qwen
+
         self.repository = MemoryRepository(db_path)
         self.store = PersistentMemoryStore(self.repository)
 
         # Existing matcher/updater logic works with the MemoryStore API.
-        # We create them here against the persistent store.
         matcher = MemoryMatcher(self.store)
         updater = MemoryUpdater(self.store)
 
@@ -85,9 +88,13 @@ class MemorySystem:
         self.context_formatter = MemoryContextFormatter()
         self.cheap_memory_router = CheapMemoryRouter()
 
-        # every_n_memories=0 disables the periodic auto-trigger — only
-        # force_dream() invokes it for now, nothing calls notify_memory_changes.
-        self.dreaming_engine = DreamingEngine(store=self.store, qwen=qwen, every_n_memories=0)
+        # Automatic Dreaming is disabled for now.
+        # Only force_dream() invokes it.
+        self.dreaming_engine = DreamingEngine(
+            store=self.store,
+            qwen=qwen,
+            every_n_memories=0,
+        )
 
     # =========================================================
     # PUBLIC API
@@ -109,7 +116,92 @@ class MemorySystem:
             changed_memories=result.memories,
             decisions=result.decisions,
         )
+
         return result
+
+    # =========================================================
+    # MANUAL MEMORY
+    # =========================================================
+
+    def add_memory(
+        self,
+        content: str,
+        user_id: str,
+        memory_type: MemoryType = MemoryType.FACT,
+        confidence: float = 1.0,
+        importance: float = 1.0,
+        freshness: float = 1.0,
+    ) -> Memory:
+        """Immediately add a manually created memory.
+
+        Manual memories bypass:
+        - cheap memory router
+        - extraction
+        - validation
+        - grammar normalization
+        - matching
+        - consolidation
+        - updater pipeline
+
+        The memory is always created as ACTIVE and immediately added
+        to both SQLite and FAISS.
+        """
+
+        now = datetime.utcnow()
+
+        memory = Memory(
+            id=str(uuid.uuid4()),
+            user_id=user_id,
+            type=memory_type,
+            content=content,
+            confidence=confidence,
+            importance=importance,
+            freshness=freshness,
+            status=MemoryStatus.ACTIVE,
+            sources=[],
+            created_at=now,
+            updated_at=now,
+            valid_from=now,
+            valid_until=None,
+            metadata={
+                "manual": True,
+                "subject": None,
+                "subject_is_user": False,
+                "subject_evidence": "manual",
+                "subject_confidence": 1.0,
+                "entities": [],
+                "relations": [],
+                "temporal": [],
+                "grounding": {},
+                "semantic_scope": None,
+                "semantic_relations": [],
+                "source_text": content,
+            },
+        )
+
+        # Save to SQLite.
+        self.repository.add(memory)
+
+        # Add to FAISS.
+        embedding = self.retrieval_models.embedder.encode_documents(
+            [memory.content]
+        )
+
+        self.index.add(
+            [memory.id],
+            embedding,
+            signatures={
+                memory.id: self.index.memory_signature(memory)
+            },
+        )
+
+        self.index.save()
+
+        return memory
+
+    # =========================================================
+    # READ
+    # =========================================================
 
     def get_all(self, user_id: str):
         """Return all memories of the user, including non-active ones."""
@@ -132,65 +224,106 @@ class MemorySystem:
             candidate_k=max(top_k * 3, 12),
         )
 
-    def delete(self, memory_id: str, user_id: str) -> None:
+    # =========================================================
+    # DELETE
+    # =========================================================
+
+    def delete(
+        self,
+        memory_id: str,
+        user_id: str,
+    ) -> None:
         """Delete one memory belonging to the specified user."""
+
         memory = self.repository.get(memory_id)
+
         if memory is None:
-            raise ValueError(f"Memory with id '{memory_id}' does not exist.")
+            raise ValueError(
+                f"Memory with id '{memory_id}' does not exist."
+            )
+
         if memory.user_id != user_id:
-            raise ValueError("Memory does not belong to the specified user.")
+            raise ValueError(
+                "Memory does not belong to the specified user."
+            )
 
         self.repository.delete(memory_id)
         self.index_manager.rebuild()
 
-    def force_dream(self, user_id: str) -> dict[str, Any]:
-        """Batch memory consolidation ("dreaming"): review all of a user's
-        active memories together in one LLM pass, merging obvious
-        duplicates into a compacted record and archiving explicitly
-        superseded/cancelled/completed ones — the kind of cleanup
-        incremental per-message consolidation (matcher+consolidator, which
-        only ever compares one new candidate against its single best match)
-        can't do on its own.
+    # =========================================================
+    # DREAMING
+    # =========================================================
 
-        Delegates to DreamingEngine (dreaming_engine.py), which is strict
-        about it: an archive is only honored if the model's own stated
-        reason contains an explicit obsolescence marker AND is backed by
-        matching semantic scope/relations (or an explicit marker in the
-        memory's own text) — "unrelated to another memory's topic" alone
-        is never accepted as a reason. Nothing is ever hard deleted, only
-        marked ARCHIVED, and expired memories (valid_until in the past) are
-        archived deterministically before the LLM is even involved.
-        """
+    def force_dream(
+        self,
+        user_id: str,
+    ) -> dict[str, Any]:
+        """Run Dreaming for the specified user."""
+
         if self.qwen is None:
-            raise RuntimeError("force_dream() requires a qwen model — construct MemorySystem with qwen=...")
+            raise RuntimeError(
+                "force_dream() requires a qwen model — "
+                "construct MemorySystem with qwen=..."
+            )
 
         result = self.dreaming_engine.force_run(user_id)
 
         merged = [
-            {"keep_id": op.keep_id, "removed_ids": op.archive_ids, "reason": op.reason}
+            {
+                "keep_id": op.keep_id,
+                "removed_ids": op.archive_ids,
+                "reason": op.reason,
+            }
             for op in result.merge_operations
         ]
+
         archived = [
-            {"ids": op.memory_ids, "reason": op.reason}
+            {
+                "ids": op.memory_ids,
+                "reason": op.reason,
+            }
             for op in result.archive_operations
         ]
 
         if result.summary:
             summary = result.summary
+
         elif merged or archived:
             parts = []
+
             if merged:
-                parts.append(f"объединено записей: {sum(len(m['removed_ids']) for m in merged)}")
+                parts.append(
+                    "объединено записей: "
+                    f"{sum(len(m['removed_ids']) for m in merged)}"
+                )
+
             if archived:
-                parts.append(f"архивировано: {sum(len(a['ids']) for a in archived)}")
+                parts.append(
+                    "архивировано: "
+                    f"{sum(len(a['ids']) for a in archived)}"
+                )
+
             summary = ", ".join(parts).capitalize() + "."
+
         else:
             summary = "Дубликатов и противоречий не найдено."
 
-        return {"merged": merged, "archived": archived, "summary": summary}
+        return {
+            "merged": merged,
+            "archived": archived,
+            "summary": summary,
+        }
 
-    def clear(self, user_id: str) -> None:
+    # =========================================================
+    # CLEAR
+    # =========================================================
+
+    def clear(
+        self,
+        user_id: str,
+    ) -> None:
         """Delete all memories of the specified user."""
+
         memories = self.repository.find_by_user(
             user_id=user_id,
             active_only=False,
@@ -201,6 +334,9 @@ class MemorySystem:
 
         self.index_manager.rebuild()
 
+    # =========================================================
+    # CLOSE
+    # =========================================================
+
     def close(self) -> None:
         self.repository.close()
-

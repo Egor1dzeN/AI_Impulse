@@ -376,12 +376,12 @@ class MemoryRetrieverV2:
     # =========================================================
 
     def search(
-        self,
-        query: str,
-        user_id: str,
-        top_k: int = 5,
-        candidate_k: int = 20,
-        max_related_per_seed: int = 3,
+            self,
+            query: str,
+            user_id: str,
+            top_k: int = 5,
+            candidate_k: int = 20,
+            max_related_per_seed: int = 3,
     ) -> list[ExpandedMemory]:
         """
         Retrieval order:
@@ -392,10 +392,12 @@ class MemoryRetrieverV2:
             4. graph expansion for entity-centric queries
             5. thresholded semantic fallback
 
-        For entity-centric queries the primary seed is expanded FIRST.
-        If graph expansion produces related memories, unrelated semantic
-        hits are not appended afterwards.
+        For normal semantic retrieval, at least 3 results are returned
+        when 3 or more FAISS candidates exist.
+
+        top_k is the maximum number of results.
         """
+
         top_k = max(1, top_k)
         candidate_k = max(top_k, candidate_k)
         max_related_per_seed = max(0, max_related_per_seed)
@@ -410,12 +412,20 @@ class MemoryRetrieverV2:
         if not vector_results:
             return []
 
+        # We want at least 3 results whenever there are at least
+        # 3 candidates available.
+        minimum_results = min(3, len(vector_results))
+
         all_memories = self.retriever.repository.find_by_user(
             user_id=user_id,
             active_only=True,
         )
 
-        documents = [result.memory.content for result in vector_results]
+        documents = [
+            result.memory.content
+            for result in vector_results
+        ]
+
         reranker_scores = self.reranker.score_pairs(
             query=query,
             documents=documents,
@@ -433,7 +443,11 @@ class MemoryRetrieverV2:
 
         # Stable lookup for vector/reranker metadata.
         result_by_id = {
-            result.memory.id: (result, float(reranker_scores[index]), index + 1)
+            result.memory.id: (
+                result,
+                float(reranker_scores[index]),
+                index + 1,
+            )
             for index, result in enumerate(vector_results)
         }
 
@@ -441,16 +455,17 @@ class MemoryRetrieverV2:
         seen: set[str] = set()
 
         def append_result(
-            memory: Memory,
-            vector_score: float,
-            reranker_score: float,
-            vector_rank: int,
-            reason: str,
+                memory: Memory,
+                vector_score: float,
+                reranker_score: float,
+                vector_rank: int,
+                reason: str,
         ) -> bool:
             if memory.id in seen:
                 return False
 
             seen.add(memory.id)
+
             selected.append(
                 ExpandedMemory(
                     memory=memory,
@@ -460,12 +475,13 @@ class MemoryRetrieverV2:
                     retrieval_reason=reason,
                 )
             )
+
             return len(selected) >= top_k
 
         def append_vector_result(
-            index: int,
-            reason: str,
-            require_semantic_threshold: bool = False,
+                index: int,
+                reason: str,
+                require_semantic_threshold: bool = False,
         ) -> bool:
             result = vector_results[index]
             score = float(reranker_scores[index])
@@ -492,15 +508,21 @@ class MemoryRetrieverV2:
                 result = vector_results[index]
 
                 if not self._matches_temporal_scope(
-                    result.memory,
-                    temporal_scope,
+                        result.memory,
+                        temporal_scope,
                 ):
                     continue
 
-                if query_type is not None and result.memory.type != query_type:
+                if (
+                        query_type is not None
+                        and result.memory.type != query_type
+                ):
                     continue
 
-                if append_vector_result(index, "temporal_match"):
+                if append_vector_result(
+                        index,
+                        "temporal_match",
+                ):
                     return selected
 
             return selected
@@ -515,12 +537,16 @@ class MemoryRetrieverV2:
                 if result.memory.type != query_type:
                     continue
 
-                if append_vector_result(index, "type_filtered"):
+                if append_vector_result(
+                        index,
+                        "type_filtered",
+                ):
                     return selected
 
         # ---------------------------------------------------------
-        # 3. Entity-centric query: choose strongest semantic seed,
-        #    then expand that seed through explicit graph metadata.
+        # 3. Entity-centric query:
+        #    choose strongest semantic seed,
+        #    then expand through explicit graph metadata.
         # ---------------------------------------------------------
         if entity_centric:
             primary_seed_index: int | None = None
@@ -538,8 +564,8 @@ class MemoryRetrieverV2:
                 seed_result = vector_results[primary_seed_index]
 
                 if append_vector_result(
-                    primary_seed_index,
-                    "entity_seed",
+                        primary_seed_index,
+                        "entity_seed",
                 ):
                     return selected
 
@@ -558,51 +584,74 @@ class MemoryRetrieverV2:
                     vector_rank = 0
 
                     if memory.id in result_by_id:
-                        result, score, rank = result_by_id[memory.id]
+                        result, score, rank = result_by_id[
+                            memory.id
+                        ]
+
                         vector_score = result.vector_score
                         reranker_score = score
                         vector_rank = rank
 
                     if append_result(
-                        memory=memory,
-                        vector_score=vector_score,
-                        reranker_score=reranker_score,
-                        vector_rank=vector_rank,
-                        reason="related_memory",
+                            memory=memory,
+                            vector_score=vector_score,
+                            reranker_score=reranker_score,
+                            vector_rank=vector_rank,
+                            reason="related_memory",
                     ):
                         return selected
 
-                # For an entity-centric request, once the graph produced
-                # related facts, do not fill the rest with unrelated
-                # semantic hits from the user's entire memory.
-                if len(selected) > 1:
+                # If graph expansion already produced the required
+                # minimum number of results, return them.
+                if len(selected) >= minimum_results:
                     return selected
 
         # ---------------------------------------------------------
-        # 4. Thresholded semantic fallback.
+        # 4. Semantic fallback.
         #
-        # We do not promise top_k results. A query may have only one or a
-        # few genuinely relevant memories. Besides the probability floor,
-        # stop when the reranker score suddenly drops: this keeps the
-        # relevant cluster while cutting off unrelated memories.
+        # The first 3 reranked candidates are accepted without
+        # probability / score-drop filtering.
+        #
+        # Starting from the 4th candidate, the original semantic
+        # filtering rules are applied.
         # ---------------------------------------------------------
         previous_score: float | None = None
 
         for index in ranked_indices:
             score = float(reranker_scores[index])
+
+            # Guarantee the first 3 available reranked candidates.
+            if len(selected) < minimum_results:
+                append_vector_result(
+                    index,
+                    "semantic_top3",
+                )
+
+                previous_score = score
+
+                if len(selected) >= top_k:
+                    return selected
+
+                continue
+
+            # Original semantic filtering starts from result #4.
             probability = self._sigmoid(score)
 
             if probability < self.min_semantic_probability:
                 break
 
             if (
-                previous_score is not None
-                and previous_score - score
-                >= self.semantic_score_drop_threshold
+                    previous_score is not None
+                    and previous_score - score
+                    >= self.semantic_score_drop_threshold
             ):
                 break
 
-            append_vector_result(index, "semantic")
+            append_vector_result(
+                index,
+                "semantic",
+            )
+
             previous_score = score
 
             if len(selected) >= top_k:

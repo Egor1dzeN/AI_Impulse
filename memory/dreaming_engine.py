@@ -172,7 +172,7 @@ status=запланирован есть в более новой memory, ито
         self,
         store: MemoryStore,
         qwen: Any | None = None,
-        every_n_memories: int = 20,
+        every_n_memories: int = 5,
         max_memories_per_run: int = 50,
     ) -> None:
         if every_n_memories < 0:

@@ -97,6 +97,8 @@ def get_memory_system():
             index_dir=str(DATA_DIR / "memory_index"),
             retrieval_models=retrieval_models,
             qwen=qwen,
+            dream_every_n_memories=5,
+            dream_max_memories=50,
         )
 
     return _system

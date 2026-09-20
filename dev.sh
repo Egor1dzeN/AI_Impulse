@@ -74,6 +74,13 @@ if [ ! -f ".venv/Scripts/python.exe" ]; then
     .venv/Scripts/python.exe -m pip install -r requirements.txt
 fi
 
+# Local secrets (API keys etc.) — .env is git-ignored, never committed.
+if [ -f ".env" ]; then
+    set -a
+    source .env
+    set +a
+fi
+
 echo "backend  http://127.0.0.1:8001  (логи ниже, также пишутся в backend_run.log; Ctrl+C — стоп)"
 echo ""
 

@@ -162,7 +162,16 @@ def handle_chat_turn_stream(
                             call = pending_calls.pop(msg.tool_call_id, None)
                             name = call["name"] if call else msg.name
                             arguments = call["arguments"] if call else {}
-                            result = _parse_tool_result(msg.content)
+                            # A tool built with response_format="content_and_artifact"
+                            # (currently just build_route) puts its full
+                            # result on .artifact and a slimmed-down summary
+                            # on .content — .content is what re-enters the
+                            # model's prompt on the next turn, so anything
+                            # too big for that (e.g. a route's few-thousand-
+                            # point geometry) has to travel via .artifact
+                            # instead. Everything else leaves .artifact
+                            # unset and keeps going through .content as before.
+                            result = msg.artifact if msg.artifact is not None else _parse_tool_result(msg.content)
                             logger.info(
                                 "tool call result: user_id=%s %s(%s) -> %s",
                                 user_id, name, _log_repr(arguments), _log_repr(result),

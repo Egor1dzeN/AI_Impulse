@@ -1,13 +1,15 @@
 from __future__ import annotations
 
+import os
 import xml.etree.ElementTree as ET
 from collections import defaultdict
+from datetime import date, timedelta
 from typing import Any
 
 import requests
 from langchain_core.tools import BaseTool, tool
 
-from . import db, memory_bridge
+from . import db, memory_bridge, user_settings
 
 MEMORY_TOOL_NAME = "search_memory"
 
@@ -141,6 +143,154 @@ def get_health_summary_impl(user_id: str) -> dict[str, Any]:
 
 
 # ============================================================
+# TOPIC 3b — WORKOUTS (INTERVALS.ICU)
+# ============================================================
+#
+# log_meal/log_weight/get_health_summary above are our own SQLite tables
+# for calories and body weight. This is a different concept — an actual
+# training session (a run, a ride, a gym session) — logged to a free
+# external service (intervals.icu) instead of reimplementing training-load
+# tracking ourselves. Auth is a personal API key (HTTP Basic, username
+# "API_KEY"), connected per-user via Settings (see user_settings.py) and
+# stored in the users table — not a public token like Mapbox's, so it's
+# never a source default and each user only ever sees/uses their own.
+
+INTERVALS_ICU_BASE_URL = "https://intervals.icu/api/v1"
+
+
+def _intervals_icu_auth(api_key: str) -> tuple[str, str]:
+    return ("API_KEY", api_key)
+
+
+def intervals_icu_key_is_valid(api_key: str) -> bool:
+    """Used by the Settings endpoint to confirm a key actually works before
+    saving it, rather than letting a typo surface later as a mid-chat tool
+    failure. `athlete/0` (current-athlete shorthand) is the cheapest
+    authenticated call the API offers."""
+    resp = requests.get(f"{INTERVALS_ICU_BASE_URL}/athlete/0", auth=_intervals_icu_auth(api_key), timeout=10)
+    if resp.status_code == 401:
+        return False
+    resp.raise_for_status()
+    return True
+
+
+def log_workout_impl(
+    api_key: str,
+    activity_type: str,
+    name: str,
+    date: str,
+    duration_min: float,
+    distance_km: float | None = None,
+    calories: float | None = None,
+    avg_heart_rate: float | None = None,
+    perceived_exertion: float | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {
+        "type": activity_type,
+        "name": name,
+        "start_date_local": f"{date}T12:00:00",
+        "moving_time": round(duration_min * 60),
+    }
+    if distance_km is not None:
+        payload["distance"] = distance_km * 1000
+    if calories is not None:
+        payload["calories"] = calories
+    if avg_heart_rate is not None:
+        payload["average_heartrate"] = avg_heart_rate
+    if perceived_exertion is not None:
+        payload["perceived_exertion"] = perceived_exertion
+    if notes:
+        payload["description"] = notes
+
+    resp = requests.post(
+        f"{INTERVALS_ICU_BASE_URL}/athlete/0/activities/manual",
+        json=payload,
+        auth=_intervals_icu_auth(api_key),
+        timeout=10,
+    )
+    resp.raise_for_status()
+    created = resp.json()
+
+    return {
+        "logged": True,
+        "id": created.get("id"),
+        "type": created.get("type", activity_type),
+        "name": created.get("name", name),
+        "date": date,
+        "duration_min": duration_min,
+        "distance_km": distance_km,
+    }
+
+
+def get_workouts_impl(api_key: str, days: int = 14) -> dict[str, Any]:
+    oldest = (date.today() - timedelta(days=days)).isoformat()
+
+    resp = requests.get(
+        f"{INTERVALS_ICU_BASE_URL}/athlete/0/activities",
+        params={"oldest": oldest},
+        auth=_intervals_icu_auth(api_key),
+        timeout=10,
+    )
+    resp.raise_for_status()
+    activities = resp.json()
+
+    return {
+        "days": days,
+        "count": len(activities),
+        "workouts": [
+            {
+                "id": a.get("id"),
+                "type": a.get("type"),
+                "name": a.get("name"),
+                "date": a.get("start_date_local"),
+                "duration_min": round((a.get("moving_time") or 0) / 60),
+                "distance_km": round(a["distance"] / 1000, 1) if a.get("distance") else None,
+                "calories": a.get("calories"),
+                "avg_heart_rate": a.get("average_heartrate"),
+                "training_load": a.get("icu_training_load"),
+            }
+            for a in activities
+        ],
+    }
+
+
+def get_workout_route_impl(api_key: str, workout_id: str) -> dict[str, Any]:
+    auth = _intervals_icu_auth(api_key)
+
+    activity_resp = requests.get(f"{INTERVALS_ICU_BASE_URL}/activity/{workout_id}", auth=auth, timeout=10)
+    if activity_resp.status_code == 404:
+        # The model has no way to validate a workout_id before calling this
+        # (it just copies whatever get_workouts returned, or occasionally
+        # hallucinates one despite the docstring) — a stale/bad id is an
+        # expected, recoverable case, not an exceptional one, so it gets
+        # the same {"found": False, ...} shape the rest of tools.py uses
+        # for "didn't find it" instead of raising.
+        return {"found": False, "workout_id": workout_id}
+    activity_resp.raise_for_status()
+    activity = activity_resp.json()
+
+    map_resp = requests.get(f"{INTERVALS_ICU_BASE_URL}/activity/{workout_id}/map", auth=auth, timeout=10)
+    map_resp.raise_for_status()
+    points = map_resp.json().get("latlngs") or []
+
+    summary = {
+        "found": True,
+        "workout_id": workout_id,
+        "name": activity.get("name"),
+        "type": activity.get("type"),
+        "date": activity.get("start_date_local"),
+        "distance_km": round(activity["distance"] / 1000, 1) if activity.get("distance") else None,
+        "duration_min": round((activity.get("moving_time") or 0) / 60),
+        "has_route": len(points) >= 2,
+    }
+    if len(points) < 2:
+        return summary
+
+    return {**summary, "points": points}
+
+
+# ============================================================
 # TOPIC 4 — MAPS & LOCATION
 # ============================================================
 
@@ -173,6 +323,81 @@ def geocode_location_impl(place: str) -> dict[str, Any]:
         "lat": float(hit["lat"]),
         "lon": float(hit["lon"]),
         "bbox": f"{west},{south},{east},{north}",
+    }
+
+
+# ============================================================
+# TOPIC 4b — ROUTES (MAPBOX)
+# ============================================================
+#
+# show_map/get_weather stay on Nominatim+OSM (free, no key, fine for "where
+# is X"/a plain pin). Mapbox only comes in here, for the one thing OSM's
+# free tier doesn't give us: actual turn-by-turn routing (distance/duration/
+# path). Geocoding for the two endpoints still goes through the same
+# Nominatim geocoder as everything else above — no reason to spend Mapbox
+# quota on that part too.
+
+MAPBOX_TOKEN = os.environ.get(
+    "MAPBOX_TOKEN",
+    # Public token (pk.*), scoped to Mapbox's client-side APIs (Directions,
+    # GL JS map rendering) — meant to be embedded in source/client code, not
+    # a secret. The frontend uses this same value (frontend/src/lib/mapbox.js)
+    # to render the interactive map itself. Override via env if it's ever
+    # rotated (update both places).
+    "pk.eyJ1IjoiZWdvcjFkemVuIiwiYSI6ImNtdThnZ2FoajAybW0yeXIxMWN0eWZ1aXUifQ.2fOYRI5EI-4w6aZRl3mqag",
+)
+
+MAPBOX_DIRECTIONS_URL = "https://api.mapbox.com/directions/v5/mapbox/{profile}/{coords}"
+
+_ROUTE_PROFILES = {"driving", "walking", "cycling"}
+
+
+def build_route_impl(origin: str, destination: str, profile: str = "driving") -> dict[str, Any]:
+    profile = profile if profile in _ROUTE_PROFILES else "driving"
+
+    origin_loc = geocode_location_impl(origin)
+    if not origin_loc["found"]:
+        return {"found": False, "missing": "origin", "query": origin}
+
+    dest_loc = geocode_location_impl(destination)
+    if not dest_loc["found"]:
+        return {"found": False, "missing": "destination", "query": destination}
+
+    coords = f"{origin_loc['lon']},{origin_loc['lat']};{dest_loc['lon']},{dest_loc['lat']}"
+    resp = requests.get(
+        MAPBOX_DIRECTIONS_URL.format(profile=profile, coords=coords),
+        params={
+            # geojson, not the encoded "polyline" string from the earlier
+            # static-image version: the frontend now draws the route itself
+            # with Mapbox GL JS, which wants plain [lon, lat] pairs for a
+            # GeoJSON LineString source — no client-side polyline decoder
+            # needed. "full" is safe again now that this never has to fit
+            # inside a URL (that's what forced "simplified" for the old
+            # Static Images approach).
+            "geometries": "geojson",
+            "overview": "full",
+            "access_token": MAPBOX_TOKEN,
+        },
+        timeout=8,
+    )
+    resp.raise_for_status()
+    routes = resp.json().get("routes") or []
+
+    if not routes:
+        return {"found": False, "missing": "route", "query": f"{origin} -> {destination}"}
+
+    route = routes[0]
+
+    return {
+        "found": True,
+        "origin": origin_loc["display_name"],
+        "destination": dest_loc["display_name"],
+        "profile": profile,
+        "distance_km": round(route["distance"] / 1000, 1),
+        "duration_min": round(route["duration"] / 60),
+        "origin_coords": [origin_loc["lon"], origin_loc["lat"]],
+        "destination_coords": [dest_loc["lon"], dest_loc["lat"]],
+        "route_geometry": route["geometry"]["coordinates"],
     }
 
 
@@ -347,10 +572,73 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
         """Получить сводку по калориям за сегодня и динамике веса."""
         return get_health_summary_impl(user_id=user_id)
 
+    intervals_tools: list[BaseTool] = []
+    intervals_icu_key = user_settings.get_intervals_icu_key(user_id)
+    if intervals_icu_key:
+
+        @tool
+        def log_workout(
+            activity_type: str,
+            name: str,
+            date: str,
+            duration_min: float,
+            distance_km: float | None = None,
+            calories: float | None = None,
+            avg_heart_rate: float | None = None,
+            perceived_exertion: float | None = None,
+            notes: str | None = None,
+        ) -> dict:
+            """Записать тренировку (пробежка, велосипед, зал, плавание, йога и т.п.) во внешний сервис Intervals.icu. Действие на запись. НЕ путай с log_meal/log_weight — те про калории и вес, эта функция про саму тренировку как событие. Вызывай ТОЛЬКО когда пользователь явно просит записать/сохранить тренировку (например "запиши тренировку: бег 5км за 30 минут" или "сегодня час позанимался в зале"). activity_type — тип на английском в стиле Strava: Run, Ride, WeightTraining, Swim, Walk, Hike, Workout, Yoga и т.п. — подбери ближайший по смыслу. name — короткое название тренировки. date — YYYY-MM-DD, используй сегодняшнюю дату, если пользователь не указал. duration_min — длительность в минутах. distance_km, calories, avg_heart_rate, perceived_exertion (шкала 1-10) — заполняй, только если пользователь их называл."""
+            return log_workout_impl(
+                api_key=intervals_icu_key,
+                activity_type=activity_type,
+                name=name,
+                date=date,
+                duration_min=duration_min,
+                distance_km=distance_km,
+                calories=calories,
+                avg_heart_rate=avg_heart_rate,
+                perceived_exertion=perceived_exertion,
+                notes=notes,
+            )
+
+        @tool
+        def get_workouts(days: int = 14) -> dict:
+            """Получить список тренировок пользователя из Intervals.icu за последние N дней (по умолчанию 14), включая их id. Вызывай, когда пользователь спрашивает про свои тренировки/активность за последнее время, историю пробежек/заездов и т.п. Если после этого пользователь попросит показать маршрут/карту одной из тренировок — возьми её id отсюда и вызови get_workout_route."""
+            return get_workouts_impl(api_key=intervals_icu_key, days=days)
+
+        @tool(response_format="content_and_artifact")
+        def get_workout_route(workout_id: str) -> tuple[dict, dict]:
+            """Получить маршрут (GPS-трек) конкретной тренировки из Intervals.icu — если трек есть, пользователю отдельно покажется интерактивная карта. Вызывай, когда пользователь просит показать маршрут/карту/куда он бежал/ехал на конкретной тренировке. workout_id — бери из результата get_workouts (вызови её сначала, если ещё не знаешь id нужной тренировки); никогда не придумывай и не угадывай id сам. Если found=false — такой тренировки не существует (id устарел или был придуман), сообщи об этом пользователю и предложи сначала посмотреть список через get_workouts. Если found=true, но has_route=false (например тренировка добавлена вручную) — карта не покажется, поэтому в ответе просто опиши тренировку словами (тип, дата, длительность, дистанция), не упоминая карту и не выдумывая маршрут."""
+            result = get_workout_route_impl(api_key=intervals_icu_key, workout_id=workout_id)
+            summary = {k: v for k, v in result.items() if k != "points"}
+            return summary, result
+
+        intervals_tools = [log_workout, get_workouts, get_workout_route]
+
     @tool
     def show_map(place: str) -> dict:
-        """Показать место на карте прямо в чате. Вызывай ТОЛЬКО когда пользователь явно просит показать карту или спрашивает "где находится X" — простое упоминание места в разговоре (например "я живу в X") не повод её вызывать. place — только реальное название места. Если пользователь не назвал место явно (например "покажи на карте где я живу") — сначала вызови search_memory, чтобы узнать место из памяти, и передай сюда именно то, что она вернула, слово в слово. Никогда не придумывай и не дописывай место от себя — если в памяти его нет, не вызывай эту функцию, а спроси пользователя. После вызова не добавляй в ответ данные из других функций (погоду, курс и т.п.), если их не просили."""
+        """Показать место на карте прямо в чате. Вызывай ТОЛЬКО когда пользователь явно просит показать карту или спрашивает "где находится X" — простое упоминание места в разговоре (например "я живу в X") не повод её вызывать. Если пользователь просит именно маршрут/путь/сколько ехать из одного места в другое — используй build_route, а не эту функцию. place — только реальное название места. Если пользователь не назвал место явно (например "покажи на карте где я живу") — сначала вызови search_memory, чтобы узнать место из памяти, и передай сюда именно то, что она вернула, слово в слово. Никогда не придумывай и не дописывай место от себя — если в памяти его нет, не вызывай эту функцию, а спроси пользователя. После вызова не добавляй в ответ данные из других функций (погоду, курс и т.п.), если их не просили."""
         return geocode_location_impl(place)
+
+    @tool(response_format="content_and_artifact")
+    def build_route(origin: str, destination: str, profile: str = "driving") -> tuple[dict, dict]:
+        """Построить маршрут между двумя точками: расстояние, время в пути и карта с проложенным путём. Вызывай ТОЛЬКО когда пользователь явно просит маршрут/путь/"как добраться из X в Y"/сколько ехать или идти — для простого "покажи X на карте" используй show_map, а не эту функцию. profile — один из driving (по умолчанию, на машине), walking (пешком), cycling (на велосипеде), выбирай по смыслу запроса. origin и destination — реальные названия мест; если одно из них не названо явно (например "маршрут до работы"), сначала вызови search_memory, чтобы узнать место из памяти, и передай сюда именно то, что она вернула. Карта уже показывается пользователю отдельно — в ответе просто назови расстояние и время в пути своими словами."""
+        result = build_route_impl(origin=origin, destination=destination, profile=profile)
+
+        # response_format="content_and_artifact": `content` (returned first)
+        # is what actually lands in the model's prompt on the next turn,
+        # `artifact` is carried on the ToolMessage for the app to read but
+        # is never serialized into any prompt. route_geometry can be
+        # thousands of [lon, lat] pairs (a few hundred KB as JSON) — feeding
+        # that back into the model blew past its context window and crashed
+        # generation with a CUDA OOM. The frontend map only needs the full
+        # `result` (with route_geometry); the model only needs the summary.
+        if not result["found"]:
+            return result, result
+
+        summary = {k: v for k, v in result.items() if k != "route_geometry"}
+        return summary, result
 
     @tool
     def get_weather(place: str) -> dict:
@@ -370,7 +658,9 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
         log_meal,
         log_weight,
         get_health_summary,
+        *intervals_tools,
         show_map,
+        build_route,
         get_weather,
         get_exchange_rate,
     ]

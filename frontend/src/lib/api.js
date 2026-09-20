@@ -98,3 +98,15 @@ export function deleteMemory(memoryId) {
 export function fetchSandbox() {
   return fetch(`${BASE}/api/sandbox`, { headers: authHeaders() }).then(json);
 }
+
+export function fetchSettings() {
+  return fetch(`${BASE}/api/settings`, { headers: authHeaders() }).then(json);
+}
+
+export function updateSettings(payload) {
+  return fetch(`${BASE}/api/settings`, {
+    method: 'PUT',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify(payload),
+  }).then(json);
+}

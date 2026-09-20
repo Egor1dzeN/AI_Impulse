@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 import uuid
 from contextlib import contextmanager
@@ -17,6 +18,7 @@ CREATE TABLE IF NOT EXISTS users (
     username TEXT NOT NULL UNIQUE,
     password_hash TEXT NOT NULL,
     google_id TEXT,
+    intervals_icu_api_key TEXT,
     created_at TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id) WHERE google_id IS NOT NULL;
@@ -105,6 +107,19 @@ def _migrate(conn: sqlite3.Connection) -> None:
     user_columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
     if user_columns and "google_id" not in user_columns:
         conn.execute("ALTER TABLE users ADD COLUMN google_id TEXT")
+
+    if user_columns and "intervals_icu_api_key" not in user_columns:
+        conn.execute("ALTER TABLE users ADD COLUMN intervals_icu_api_key TEXT")
+
+        # This column replaces the old single global INTERVALS_ICU_API_KEY
+        # env var, which every user effectively shared before per-user keys
+        # (set via Settings) existed. Seed existing users with it once, so
+        # this migration doesn't silently break workout logging for whoever
+        # already had it working — new users start disconnected and add
+        # their own key through Settings.
+        env_key = os.environ.get("INTERVALS_ICU_API_KEY")
+        if env_key:
+            conn.execute("UPDATE users SET intervals_icu_api_key = ?", (env_key,))
 
     # Ensure conversations exists before the backfill below can insert into
     # it — the schema script itself only runs after this function returns.

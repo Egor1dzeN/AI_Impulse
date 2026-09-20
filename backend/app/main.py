@@ -26,7 +26,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
-from . import agent, auth, conversations, db, mcp_tools, memory_bridge, tools
+from . import agent, auth, conversations, db, mcp_tools, memory_bridge, tools, user_settings
 from .schemas import (
     AddMemoryRequest,
     ChatMessageOut,
@@ -38,7 +38,9 @@ from .schemas import (
     MemorySearchOut,
     RegisterRequest,
     SandboxOut,
+    SettingsOut,
     TokenOut,
+    UpdateSettingsRequest,
 )
 
 app = FastAPI(title="Impulse Agent API")
@@ -183,3 +185,24 @@ def delete_memory(memory_id: str, user_id: str = Depends(auth.get_current_user_i
 @app.get("/api/sandbox", response_model=SandboxOut)
 def sandbox(user_id: str = Depends(auth.get_current_user_id)) -> dict:
     return tools.get_sandbox_snapshot(user_id)
+
+
+@app.get("/api/settings", response_model=SettingsOut)
+def get_settings(user_id: str = Depends(auth.get_current_user_id)) -> dict:
+    return user_settings.get_settings(user_id)
+
+
+@app.put("/api/settings", response_model=SettingsOut)
+def update_settings(req: UpdateSettingsRequest, user_id: str = Depends(auth.get_current_user_id)) -> dict:
+    if req.intervals_icu_api_key is not None:
+        key = req.intervals_icu_api_key.strip()
+        if key:
+            # Validate against Intervals.icu before saving — otherwise a
+            # typo'd key would only surface later, as a cryptic mid-chat
+            # tool failure, instead of an immediate error right here.
+            if not tools.intervals_icu_key_is_valid(key):
+                raise HTTPException(status_code=400, detail="invalid Intervals.icu API key")
+            user_settings.set_intervals_icu_key(user_id, key)
+        else:
+            user_settings.set_intervals_icu_key(user_id, None)
+    return user_settings.get_settings(user_id)

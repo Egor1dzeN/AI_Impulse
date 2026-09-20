@@ -4,6 +4,7 @@ import Chat from './components/Chat';
 import Composer from './components/Composer';
 import MemoryPanel from './components/MemoryPanel';
 import ChatList from './components/ChatList';
+import SettingsPanel from './components/SettingsPanel';
 import Menu from './components/Menu';
 import Login from './components/Login';
 import { createConversation, fetchConversations, fetchHistory, sendChat } from './lib/api';
@@ -28,6 +29,7 @@ export default function App() {
   const [isChat, setIsChat] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [chatListOpen, setChatListOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
   const [conversationId, setConversationId] = useState(null);
   const [historyLoaded, setHistoryLoaded] = useState(false);
   const [sendTick, setSendTick] = useState(0);
@@ -266,6 +268,7 @@ export default function App() {
               </button>
             )}
           >
+            <button type="button" className="menu__item" onClick={() => setSettingsOpen(true)}>Настройки</button>
             <button type="button" className="menu__item" onClick={signOut}>Выйти</button>
           </Menu>
         </div>
@@ -312,6 +315,8 @@ export default function App() {
         onDeleted={handleConversationDeleted}
         onClose={() => setChatListOpen(false)}
       />
+
+      <SettingsPanel open={settingsOpen} onClose={() => setSettingsOpen(false)} />
     </>
   );
 }

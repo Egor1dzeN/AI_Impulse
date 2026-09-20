@@ -37,7 +37,15 @@ def build_graph(user_id: str, enable_thinking: bool = True) -> CompiledStateGrap
 
     graph = StateGraph(MessagesState)
     graph.add_node("agent", agent_node)
-    graph.add_node("tools", ToolNode(all_tools))
+    # handle_tool_errors=True: this build's langgraph only auto-recovers
+    # from its own internal ToolInvocationError by default — any other
+    # exception a tool raises (a bad id producing an HTTPError, a timeout,
+    # ...) is re-raised and crashes the whole graph run, killing the SSE
+    # stream mid-turn instead of just failing that one tool call. This
+    # turns any such exception into a ToolMessage the model can see and
+    # react to (retry, apologize, ask again) so one flaky/misused tool
+    # call can't take down the entire turn.
+    graph.add_node("tools", ToolNode(all_tools, handle_tool_errors=True))
     graph.add_edge(START, "agent")
     graph.add_conditional_edges("agent", route, {"tools": "tools", END: END})
     graph.add_edge("tools", "agent")

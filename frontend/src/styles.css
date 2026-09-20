@@ -7,6 +7,7 @@
   color-scheme: light;
 
   --paper:       #FFFFFF;
+  --paper-soft:  #FFFBF9;
   --ink:         #241A14;
   --ink-soft:    #6E5C52;
   --ink-faint:   #A08E84;
@@ -26,6 +27,44 @@
 
   --font-ui: "Onest", ui-sans-serif, system-ui, "Segoe UI", sans-serif;
   --font-display: "Unbounded", var(--font-ui);
+}
+
+/* Тёмная тема: два пути к одним и тем же значениям —
+   media query для "системной" темы (когда пользователь её не переопределил)
+   и явный атрибут для принудительного выбора в Настройках. */
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    color-scheme: dark;
+
+    --paper:       #17110D;
+    --paper-soft:  #1D1611;
+    --ink:         #F2E8E1;
+    --ink-soft:    #C0AFA5;
+    --ink-faint:   #8A7A70;
+    --line:        #2A211B;
+    --line-strong: #3A2E26;
+
+    --flare:       #FF6A1A;
+    --flare-deep:  #FF9358;
+    --flare-tint:  #2E1D12;
+    --flare-line:  #4A2E1C;
+  }
+}
+:root[data-theme="dark"]{
+  color-scheme: dark;
+
+  --paper:       #17110D;
+  --paper-soft:  #1D1611;
+  --ink:         #F2E8E1;
+  --ink-soft:    #C0AFA5;
+  --ink-faint:   #8A7A70;
+  --line:        #2A211B;
+  --line-strong: #3A2E26;
+
+  --flare:       #FF6A1A;
+  --flare-deep:  #FF9358;
+  --flare-tint:  #2E1D12;
+  --flare-line:  #4A2E1C;
 }
 
 *{ box-sizing:border-box }
@@ -248,7 +287,7 @@ body.is-chat .feed{ display:flex }
   border-radius:20px 20px 6px 20px;
   background:var(--flare-tint);
   border:1px solid var(--flare-line);
-  color:#4A2A16;
+  color:var(--flare-deep);
 }
 
 .msg--ai{ gap:14px; align-items:flex-start }
@@ -269,6 +308,14 @@ body.is-chat .feed{ display:flex }
 .msg__body li{ margin:.25em 0 }
 .msg__body li::marker{ color:var(--flare) }
 .msg__body strong{ font-weight:600 }
+.msg__body a{
+  color:var(--flare-deep);
+  font-weight:500;
+  text-decoration:none;
+  border-bottom:1px solid var(--flare-line);
+  transition:border-color .15s;
+}
+.msg__body a:hover{ border-color:var(--flare-deep) }
 .msg__body code{
   font-family:ui-monospace, "SFMono-Regular", Menlo, Consolas, monospace;
   font-size:.88em;
@@ -282,7 +329,7 @@ body.is-chat .feed{ display:flex }
   border:1px solid var(--line);
   border-left:2px solid var(--flare);
   border-radius:4px 12px 12px 4px;
-  background:#FFFBF9;
+  background:var(--paper-soft);
   overflow:hidden;
 }
 .msg__body .codeblock__bar{
@@ -334,6 +381,38 @@ body.is-chat .feed{ display:flex }
 .hljs-emphasis{ font-style:italic }
 .hljs-strong{ font-weight:700 }
 .hljs-link{ color:var(--flare-deep); text-decoration:underline }
+
+/* These four hljs colors above are tuned for a light codeblock background
+   and lose contrast once --paper-soft goes dark — lighter/more saturated
+   equivalents for the same roles. */
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]) .hljs-string,
+  :root:not([data-theme="light"]) .hljs-regexp,
+  :root:not([data-theme="light"]) .hljs-attr,
+  :root:not([data-theme="light"]) .hljs-symbol,
+  :root:not([data-theme="light"]) .hljs-bullet,
+  :root:not([data-theme="light"]) .hljs-addition{ color:#5FD9A0 }
+  :root:not([data-theme="light"]) .hljs-number,
+  :root:not([data-theme="light"]) .hljs-deletion{ color:#E0A468 }
+  :root:not([data-theme="light"]) .hljs-title,
+  :root:not([data-theme="light"]) .hljs-title.function_,
+  :root:not([data-theme="light"]) .hljs-title.class_,
+  :root:not([data-theme="light"]) .hljs-section,
+  :root:not([data-theme="light"]) .hljs-attribute{ color:#ABA5F0 }
+}
+:root[data-theme="dark"] .hljs-string,
+:root[data-theme="dark"] .hljs-regexp,
+:root[data-theme="dark"] .hljs-attr,
+:root[data-theme="dark"] .hljs-symbol,
+:root[data-theme="dark"] .hljs-bullet,
+:root[data-theme="dark"] .hljs-addition{ color:#5FD9A0 }
+:root[data-theme="dark"] .hljs-number,
+:root[data-theme="dark"] .hljs-deletion{ color:#E0A468 }
+:root[data-theme="dark"] .hljs-title,
+:root[data-theme="dark"] .hljs-title.function_,
+:root[data-theme="dark"] .hljs-title.class_,
+:root[data-theme="dark"] .hljs-section,
+:root[data-theme="dark"] .hljs-attribute{ color:#ABA5F0 }
 
 .caret{
   display:inline-block;
@@ -689,8 +768,18 @@ body.is-chat .dock{ transform:none }
   height:280px;
   border:0;
 }
+.mapbox-embed__canvas{
+  width:100%;
+  height:280px;
+}
+/* Mapbox's own compact attribution control — keep it legible but out of
+   the way, it doesn't need to compete visually with the rest of the UI. */
+.mapboxgl-ctrl-bottom-right .mapboxgl-ctrl{ margin:0 6px 6px 0 }
+.mapboxgl-ctrl-attrib{ font-size:10px }
 .map-embed__link{
-  display:block;
+  display:flex;
+  align-items:center;
+  gap:6px;
   padding:8px 12px;
   font-size:12px;
   color:var(--ink-soft);
@@ -699,6 +788,7 @@ body.is-chat .dock{ transform:none }
   text-overflow:ellipsis;
   border-top:1px solid var(--line);
 }
+.map-embed__link svg{ flex:none; width:13px; height:13px }
 .map-embed__link:hover{ color:var(--flare-deep) }
 
 .map-embed__miss{
@@ -904,3 +994,97 @@ body.is-chat .dock{ transform:none }
 }
 .chat-list__item-remove svg{ width:12px; height:12px }
 .chat-list__item-remove:hover{ color:var(--flare-deep); background:var(--flare-tint) }
+
+/* ── Настройки ───────────────────────────────────────────────────── */
+
+.settings-panel{
+  position:fixed;
+  inset:0;
+  z-index:40;
+}
+.settings-panel__backdrop{
+  position:absolute;
+  inset:0;
+  background:rgba(36,26,20,.28);
+  animation:fade .2s ease both;
+}
+
+.settings-panel__body{
+  position:absolute;
+  top:0; right:0; bottom:0;
+  width:min(420px, 100vw);
+  background:var(--paper);
+  border-left:1px solid var(--line-strong);
+  box-shadow:-24px 0 48px -24px rgba(36,26,20,.25);
+  padding:22px 22px 32px;
+  overflow-y:auto;
+  animation:slide-in .28s var(--ease) both;
+}
+
+.settings-panel__head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  margin-bottom:18px;
+}
+.settings-panel__head h2{
+  font-family:var(--font-display);
+  font-size:19px;
+  font-weight:500;
+  margin:0;
+}
+.settings-panel__hint{ color:var(--ink-faint); font-size:13.5px; margin:0 0 12px }
+.settings-panel__hint--error{ color:var(--flare-deep) }
+
+.settings-panel section{ margin-bottom:26px }
+.settings-panel h3{
+  font-size:13px;
+  font-weight:600;
+  text-transform:uppercase;
+  letter-spacing:.04em;
+  color:var(--ink-soft);
+  margin:0 0 10px;
+}
+
+.theme-switch{
+  display:flex;
+  gap:4px;
+  padding:4px;
+  border:1px solid var(--line-strong);
+  border-radius:999px;
+  background:var(--paper-soft);
+}
+.theme-switch__option{
+  flex:1;
+  padding:7px 10px;
+  border:0;
+  border-radius:999px;
+  background:none;
+  font-size:13px;
+  color:var(--ink-soft);
+  transition:background .15s, color .15s;
+}
+.theme-switch__option:hover{ color:var(--flare-deep) }
+.theme-switch__option--active{
+  background:var(--flare-tint);
+  color:var(--flare-deep);
+  font-weight:500;
+}
+
+.settings-connect{ display:flex; flex-direction:column; gap:10px }
+.settings-connect__status{
+  display:flex;
+  align-items:center;
+  gap:8px;
+  padding:10px 12px;
+  border:1px solid var(--line);
+  border-radius:12px;
+  font-size:13.5px;
+}
+.settings-connect__dot{
+  flex:none;
+  width:8px; height:8px;
+  border-radius:50%;
+  background:#2ecc71;
+}
+.settings-connect__dot--off{ background:var(--ink-faint) }

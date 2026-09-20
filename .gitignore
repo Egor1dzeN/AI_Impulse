@@ -1,6 +1,7 @@
 .claude
 .idea
 /backend/.venv
+/backend/.env
 /backend/data/**
 **/__pycache__/
 *.pyc

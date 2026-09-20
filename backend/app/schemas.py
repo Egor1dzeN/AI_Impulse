@@ -68,3 +68,12 @@ class SandboxOut(BaseModel):
     expenses: list[dict[str, Any]]
     meals: list[dict[str, Any]]
     weights: list[dict[str, Any]]
+
+
+class SettingsOut(BaseModel):
+    intervals_icu_connected: bool
+
+
+class UpdateSettingsRequest(BaseModel):
+    # None = leave as-is, "" = disconnect, non-empty = connect/replace.
+    intervals_icu_api_key: str | None = None

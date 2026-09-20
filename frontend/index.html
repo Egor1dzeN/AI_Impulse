@@ -9,6 +9,18 @@
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Onest:wght@300..700&family=Unbounded:wght@200..600&display=swap" rel="stylesheet">
 <script src="https://accounts.google.com/gsi/client" async defer></script>
+<script>
+  // Applies the saved theme before first paint, so switching to/loading in
+  // dark mode never flashes light first. Mirrors lib/settings.js's
+  // getTheme()/applyTheme() — duplicated here (not imported) because this
+  // has to run before any module script, including main.jsx, loads.
+  (function () {
+    try {
+      var t = localStorage.getItem('impulse_theme');
+      if (t === 'light' || t === 'dark') document.documentElement.setAttribute('data-theme', t);
+    } catch (e) {}
+  })();
+</script>
 </head>
 <body>
 <div id="root"></div>

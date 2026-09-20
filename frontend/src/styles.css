@@ -371,6 +371,19 @@ body.is-chat .feed{ display:flex }
 .dots i:nth-child(3){ animation-delay:.3s }
 @keyframes pip{ 30%{ opacity:1; transform:translateY(-3px) } }
 
+.thinking{
+  display:flex; align-items:center; gap:8px;
+  padding:12px 0;
+  color:var(--ink-soft);
+  font-size:15px;
+}
+.thinking .dots{ padding:0 }
+.thinking__word{
+  display:inline-block;
+  animation:thinking-in .35s var(--ease);
+}
+@keyframes thinking-in{ from{ opacity:0; transform:translateY(3px) } }
+
 /* ── Поле ввода ──────────────────────────────────────────────────── */
 
 /* На стартовом экране поле ввода подтянуто к заставке;

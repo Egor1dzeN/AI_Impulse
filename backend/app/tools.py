@@ -384,6 +384,8 @@ def build_memory_tool(user_id: str) -> BaseTool:
     def search_memory(query: str) -> str:
         """Найти релевантные факты о пользователе в долгосрочной памяти. Передавай короткий целевой поисковый запрос (например «любимая еда» или «дедлайн проекта»), а не весь вопрос пользователя целиком. Можно вызывать несколько раз подряд с разными формулировками, если первого результата недостаточно."""
         context = memory_bridge.retrieve_memory_context(query, user_id, top_k=5)
+        print("ПОИСК ПО ПАМЯТИ ДАЛ РЕЗУЛЬТАТ:\n", flush=True)
+        print(context, flush=True)
         return context if context else "По этому запросу в памяти ничего не найдено."
 
     return search_memory

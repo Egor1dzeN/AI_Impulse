@@ -129,6 +129,20 @@ status=запланирован есть в более новой memory, ито
 - "Memory старая" без дополнительного объяснения НЕ является допустимой
   причиной для archive.
 
+ДЛЯ MANUAL MEMORY:
+Если memory содержит "manual": true, это означает, что пользователь
+явно добавил эту запись вручную.
+1. Такая memory считается пользовательской и не должна архивироваться
+   из-за устаревания, нерелевантности или отсутствия связи с другими
+   memories.
+2. Manual memory МОЖНО объединить с другой memory, если они содержат
+   одну и ту же информацию.
+3. В частности, различия регистра, пунктуации и формы написания слова
+   сами по себе не делают две одинаковые по смыслу manual memories
+   разными фактами.
+4. Если две manual memories являются дублями, оставь одну из них ACTIVE,
+   а вторую архивируй.
+5. При merge итоговая memory должна сохранять manual=true.
 Если переработка не нужна — верни пустой массив operations.
 
 ФОРМАТ ОТВЕТА — ТОЛЬКО JSON:
@@ -247,7 +261,6 @@ status=запланирован есть в более новой memory, ито
                     "type": memory.type.value,
                     "content": memory.content,
                     "status": memory.status.value,
-                    "manual": bool(metadata.get("manual", False)),
                     "confidence": memory.confidence,
                     "importance": memory.importance,
                     "freshness": memory.freshness,
@@ -271,17 +284,13 @@ status=запланирован есть в более новой memory, ито
                         if memory.valid_until
                         else None
                     ),
-                    "semantic_scope": metadata.get(
-                        "semantic_scope"
-                    ),
+                    "manual": bool(metadata.get("manual", False)),
+                    "semantic_scope": metadata.get("semantic_scope"),
                     "semantic_relations": metadata.get(
                         "semantic_relations",
                         [],
                     ),
-                    "entities": metadata.get(
-                        "entities",
-                        [],
-                    ),
+                    "entities": metadata.get("entities", []),
                 }
             )
 

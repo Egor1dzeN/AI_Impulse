@@ -717,10 +717,13 @@ status=запланирован есть в более новой memory, ито
             for memory in memories
         }
 
+        # `or []` (not just a .get default) because the model frequently
+        # answers "nothing to change" with an explicit `"operations": null`
+        # rather than `[]` — a valid "no-op" response, not a malformed one,
+        # so it must not be treated as an error.
         operations = data.get(
             "operations",
-            [],
-        )
+        ) or []
 
         if not isinstance(
             operations,
@@ -925,12 +928,10 @@ status=запланирован есть в более новой memory, ито
                     operation_ids
                 )
 
-        summary = str(
-            data.get(
-                "summary",
-                "",
-            )
-        ).strip()
+        # Same null-vs-missing distinction as `operations` above: a `null`
+        # summary is a valid "nothing to say" response, not str(None)=="None".
+        summary = data.get("summary") or ""
+        summary = summary.strip() if isinstance(summary, str) else ""
 
         return (
             merges,

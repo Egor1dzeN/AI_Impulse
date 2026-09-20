@@ -117,14 +117,14 @@ class MemorySystem:
         )
 
         logger.info(
-            "%s: user_id=%s text=%r -> %d candidate(s)",
-            source, user_id, text, len(result.decisions),
+            "memory update: user_id=%s text=%r -> %d candidate(s)",
+            user_id, text, len(result.decisions),
         )
         for decision, memory in zip(result.decisions, result.memories):
             content = memory.content if memory is not None else decision.candidate.candidate.content
             logger.info(
-                "  %s decision: action=%s content=%r score=%.2f reason=%r",
-                source, decision.action.value, content, decision.score, decision.reason,
+                "  memory update decision: action=%s content=%r score=%.2f reason=%r",
+                decision.action.value, content, decision.score, decision.reason,
             )
 
         self.index_manager.sync_after_pipeline(

@@ -49,6 +49,29 @@ class FakeQwen:
         )
 
 
+class NullOperationsQwen:
+    """Mimics a real, observed Qwen3-4B response to "nothing needs to
+    change": explicit JSON nulls instead of an empty list/string. That must
+    be treated as a valid no-op, not a parse failure (see
+    DreamingEngine._validate_operations)."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        max_new_tokens: int = 1024,
+    ) -> str:
+        del system_prompt
+        del user_prompt
+        del max_new_tokens
+
+        self.calls += 1
+        return json.dumps({"operations": None, "summary": None})
+
+
 def make_memory(content: str, minutes_ago: int = 0) -> Memory:
     now = datetime.utcnow() - timedelta(minutes=minutes_ago)
 
@@ -146,6 +169,26 @@ def test_disabled_threshold() -> None:
     assert qwen.calls == 0
 
 
+def test_null_operations_is_not_an_error() -> None:
+    store = MemoryStore()
+    store.add(make_memory("Пользователь любит кофе.", 2))
+    store.add(make_memory("Пользователь пьёт чай вечером.", 1))
+
+    qwen = NullOperationsQwen()
+    engine = DreamingEngine(
+        store=store,
+        qwen=qwen,
+        every_n_memories=10,
+    )
+
+    result = engine.force_run(USER_ID)
+
+    assert qwen.calls == 1
+    assert result.merge_operations == []
+    assert result.archive_operations == []
+    assert not result.applied
+
+
 def test_no_enough_memories() -> None:
     store = MemoryStore()
     store.add(make_memory("Пользователь любит кофе."))
@@ -182,7 +225,11 @@ def main() -> None:
     test_disabled_threshold()
     print("PASS")
 
-    print("\n[4] NOT ENOUGH MEMORIES")
+    print("\n[4] NULL OPERATIONS IS NOT AN ERROR")
+    test_null_operations_is_not_an_error()
+    print("PASS")
+
+    print("\n[5] NOT ENOUGH MEMORIES")
     test_no_enough_memories()
     print("PASS")
 

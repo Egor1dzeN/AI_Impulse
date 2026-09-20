@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,8 @@ from memory_updater import MemoryUpdater
 from persistent_memory_store import PersistentMemoryStore
 from retrieval_model_manager import RetrievalModelManager
 from cheap_memory_router import CheapMemoryRouter
+
+logger = logging.getLogger(__name__)
 
 
 class MemorySystem:
@@ -94,16 +97,42 @@ class MemorySystem:
     # =========================================================
 
     def update(self, text: str, user_id: str):
-        """Process a message, skipping obvious non-memory inputs early."""
+        """Process a chat message, skipping obvious non-memory inputs early."""
         route = self.cheap_memory_router.route(text)
 
         if route.value == "skip":
+            logger.info("memory update: user_id=%s text=%r -> SKIPPED by cheap_memory_router", user_id, text)
             return self.pipeline.empty_result()
 
+        return self._process_and_sync("update", text, user_id)
+
+    def handmade_memory(self, text: str, user_id: str):
+        """Process a fact the user typed directly into the memory UI.
+
+        Skips cheap_memory_router: it's tuned to drop chat noise (questions,
+        commands, casual replies like "ок"/"спасибо"), but a deliberately
+        entered fact can innocently start with a question word ("Как зовут
+        собаку - Рекс") and would otherwise be silently discarded even
+        though the user explicitly asked to save it.
+        """
+        return self._process_and_sync("handmade_memory", text, user_id)
+
+    def _process_and_sync(self, source: str, text: str, user_id: str):
         result = self.pipeline.process(
             text=text,
             user_id=user_id,
         )
+
+        logger.info(
+            "%s: user_id=%s text=%r -> %d candidate(s)",
+            source, user_id, text, len(result.decisions),
+        )
+        for decision, memory in zip(result.decisions, result.memories):
+            content = memory.content if memory is not None else decision.candidate.candidate.content
+            logger.info(
+                "  %s decision: action=%s content=%r score=%.2f reason=%r",
+                source, decision.action.value, content, decision.score, decision.reason,
+            )
 
         self.index_manager.sync_after_pipeline(
             changed_memories=result.memories,

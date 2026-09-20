@@ -1,9 +1,12 @@
 from __future__ import annotations
 
+import logging
 import sys
 from pathlib import Path
 from threading import Lock
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 
@@ -167,12 +170,24 @@ def update_memory(text: str, user_id: str) -> None:
     get_memory_system().update(text, user_id)
 
 
+def handmade_memory(text: str, user_id: str) -> None:
+    get_memory_system().handmade_memory(text, user_id)
+
+
 def retrieve_memory_context(query: str, user_id: str, top_k: int = 5) -> str:
+    """Used by the search_memory tool the agent calls mid-conversation —
+    logged here (rather than in tools.py) so the actual retrieved hits are
+    visible, not just the fact that the tool ran."""
     system = get_memory_system()
     hits = system.retrieve(query, user_id, top_k)
-    return system.context_formatter.format(
+    context = system.context_formatter.format(
         [hit.memory for hit in hits]
     )
+    logger.info(
+        "search_memory tool: user_id=%s query=%r -> %d hit(s), context=%r",
+        user_id, query, len(hits), context,
+    )
+    return context
 
 
 def delete_memory(memory_id: str, user_id: str) -> None:
@@ -183,6 +198,7 @@ def delete_memory(memory_id: str, user_id: str) -> None:
     # manager here would leave the full system's copy silently stale for
     # search_memory. Only take the lightweight path when nothing heavy has
     # loaded yet, so a bare delete doesn't force it to.
+    logger.info("delete_memory: user_id=%s memory_id=%s", user_id, memory_id)
     if _system is not None:
         _system.delete(memory_id, user_id)
         return
@@ -206,6 +222,11 @@ def search_memories(query: str, user_id: str, top_k: int = 5) -> list[dict[str, 
     full model stack (embedder + reranker), same as retrieve_memory_context."""
     system = get_memory_system()
     hits = system.retrieve(query, user_id, top_k)
+    logger.info(
+        "manual memory search: user_id=%s query=%r -> %d hit(s): %s",
+        user_id, query, len(hits),
+        [(h.memory.type.value, h.memory.content, round(h.reranker_score, 3)) for h in hits],
+    )
     return [
         {
             "id": hit.memory.id,
@@ -225,7 +246,22 @@ def force_dream(user_id: str) -> dict[str, Any]:
     """Thin wrapper — the actual batch-consolidation logic lives on
     MemorySystem itself (memory/memory_system.py::force_dream), alongside
     update/retrieve/delete/get_all, rather than reimplemented here."""
-    return get_memory_system().force_dream(user_id)
+    logger.info("force_dream (memory consolidation) start: user_id=%s", user_id)
+    try:
+        result = get_memory_system().force_dream(user_id)
+    except Exception:
+        # Logged with the full traceback here (unlike the generic tool-call
+        # logging in agent.py) since this is the one call site where a
+        # genuine failure and a "nothing to change" outcome could otherwise
+        # look the same from the frontend's perspective — this makes a real
+        # error unambiguous in the logs when one does happen.
+        logger.exception("force_dream failed: user_id=%s", user_id)
+        raise
+    logger.info(
+        "force_dream done: user_id=%s merged=%d archived=%d summary=%r",
+        user_id, len(result["merged"]), len(result["archived"]), result["summary"],
+    )
+    return result
 
 
 def list_memories(user_id: str) -> list[dict[str, Any]]:

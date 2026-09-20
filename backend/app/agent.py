@@ -43,6 +43,18 @@ HISTORY_MESSAGE_LIMIT = 10
 # user, this only affects what the model sees on the *next* turn.
 _VOLATILE_INFO_TOOLS = {"get_weather", "get_exchange_rate", "show_map"}
 
+# Tool arguments/results can carry a big memory-context blob (search_memory)
+# or a long geometry payload — cap what lands in the log so one call can't
+# blow up the file, while still keeping enough to see what happened.
+_LOG_VALUE_LIMIT = 800
+
+
+def _log_repr(value: Any) -> str:
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False, default=str)
+    if len(text) > _LOG_VALUE_LIMIT:
+        text = text[:_LOG_VALUE_LIMIT] + f"...<{len(text) - _LOG_VALUE_LIMIT} more chars>"
+    return text
+
 
 def _load_recent_history(user_id: str, conversation_id: str) -> list[HumanMessage | AIMessage]:
     # Order by rowid, not created_at: two messages saved in quick succession
@@ -103,9 +115,15 @@ def handle_chat_turn_stream(
     extracted facts — long-term memory is user-wide (spans conversations),
     this short-term history is scoped to just this one conversation.
     """
+    logger.info(
+        "chat turn start: user_id=%s conversation_id=%s message=%s",
+        user_id, conversation_id, _log_repr(message),
+    )
+
     graph = agent_graph.build_graph(user_id, enable_thinking=enable_thinking)
     system_prompt = build_system_prompt(today=date.today().isoformat())
     history = _load_recent_history(user_id, conversation_id)
+    logger.info("chat turn: loaded %d short-term history message(s) for conversation_id=%s", len(history), conversation_id)
     inputs = {
         "messages": [SystemMessage(content=system_prompt), *history, HumanMessage(content=message)],
     }
@@ -135,17 +153,29 @@ def handle_chat_turn_stream(
                         if node_name == "agent" and isinstance(msg, AIMessage) and msg.tool_calls:
                             for tc in msg.tool_calls:
                                 pending_calls[tc["id"]] = {"name": tc["name"], "arguments": tc["args"]}
+                                logger.info(
+                                    "tool call requested: user_id=%s %s(%s)",
+                                    user_id, tc["name"], _log_repr(tc["args"]),
+                                )
                         elif node_name == "tools" and isinstance(msg, ToolMessage):
                             had_tool_call = True
                             call = pending_calls.pop(msg.tool_call_id, None)
                             name = call["name"] if call else msg.name
                             arguments = call["arguments"] if call else {}
                             result = _parse_tool_result(msg.content)
+                            logger.info(
+                                "tool call result: user_id=%s %s(%s) -> %s",
+                                user_id, name, _log_repr(arguments), _log_repr(result),
+                            )
                             yield {"type": "tool_call", "tool": name, "arguments": arguments}
                             if name != MEMORY_TOOL_NAME:
                                 last_action = {"tool": name, "arguments": arguments, "result": result}
         except GraphRecursionError:
             recursion_hit = True
+            logger.warning(
+                "recursion limit (%d) hit for user_id=%s conversation_id=%s message=%r",
+                RECURSION_LIMIT, user_id, conversation_id, message,
+            )
 
         if recursion_hit:
             fallback = "Не получилось сформировать ответ за отведённое число шагов. Попробуй переформулировать вопрос."
@@ -175,6 +205,11 @@ def handle_chat_turn_stream(
     _save_message(user_id, conversation_id, "user", message, None)
     _save_message(user_id, conversation_id, "assistant", reply, last_action)
     conversations.touch_and_maybe_title(conversation_id, message)
+
+    logger.info(
+        "chat turn done: user_id=%s conversation_id=%s reply=%s last_action_tool=%s",
+        user_id, conversation_id, _log_repr(reply), last_action["tool"] if last_action else None,
+    )
 
     yield {"type": "done", "action": last_action}
 
@@ -209,4 +244,6 @@ def _save_message(
 
 
 def extract_memory_background(user_id: str, message: str) -> None:
+    logger.info("background memory extraction start: user_id=%s message=%s", user_id, _log_repr(message))
     memory_bridge.update_memory(message, user_id)
+    logger.info("background memory extraction done: user_id=%s", user_id)

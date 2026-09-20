@@ -1,6 +1,26 @@
 from __future__ import annotations
 
 import json
+import logging
+import os
+
+# Debug-heavy logging (tool calls, memory retrieval/writes) is set up here,
+# before any `app.*` module is imported below, so every `logging.getLogger`
+# call those modules make already resolves to a configured root logger.
+# uvicorn's own dictConfig (which touches only its "uvicorn.*" loggers) runs
+# before this module is imported, so it never overwrites this.
+#
+# Root level stays at INFO (not DEBUG) on purpose: DEBUG would also unleash
+# every third-party library on the import path (httpx, urllib3, faiss,
+# transformers, ...) and bury the useful trace in noise. All the tracing
+# added for debugging (tool calls, memory retrieve/write) logs at INFO for
+# that reason. Override with LOG_LEVEL=DEBUG (or WARNING to quiet down)
+# when needed.
+logging.basicConfig(
+    level=os.environ.get("LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)-7s %(name)s: %(message)s",
+    datefmt="%H:%M:%S",
+)
 
 from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
@@ -142,7 +162,7 @@ def search_memories(q: str, user_id: str = Depends(auth.get_current_user_id)) ->
 def add_memory(req: AddMemoryRequest, user_id: str = Depends(auth.get_current_user_id)) -> dict:
     if not req.content.strip():
         raise HTTPException(status_code=400, detail="empty content")
-    memory_bridge.update_memory(req.content, user_id)
+    memory_bridge.handmade_memory(req.content, user_id)
     return {"status": "ok"}
 
 

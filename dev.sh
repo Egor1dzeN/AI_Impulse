@@ -49,10 +49,14 @@ stop_port 8001
 stop_port 5173
 sleep 1
 
-# --- frontend: install deps if missing, launch detached in background ---
+# --- frontend: install deps if missing/stale, launch detached in background ---
 cd "$root/frontend"
-if [ ! -d "node_modules" ]; then
-    echo "frontend/node_modules не найден, ставлю зависимости..."
+# npm writes node_modules/.package-lock.json to reflect exactly which
+# lockfile it last satisfied — if package-lock.json is newer than that
+# (e.g. someone else's commit added a dependency), node_modules exists but
+# is stale, and a plain "does the directory exist" check would miss it.
+if [ ! -d "node_modules" ] || [ "package-lock.json" -nt "node_modules/.package-lock.json" ]; then
+    echo "frontend/node_modules отсутствует или устарел, ставлю зависимости..."
     npm install
 fi
 

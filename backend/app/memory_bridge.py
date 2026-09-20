@@ -170,14 +170,40 @@ def update_memory(text: str, user_id: str) -> None:
     get_memory_system().update(text, user_id)
 
 
-def handmade_memory(text: str, user_id: str) -> None:
-    get_memory_system().handmade_memory(text, user_id)
+def handmade_memory(
+    text: str,
+    user_id: str,
+    memory_type: str = "fact",
+    confidence: float = 1.0,
+    importance: float = 1.0,
+    freshness: float = 1.0,
+) -> dict[str, Any]:
+    from models import MemoryType
+
+    system = get_memory_system()
+
+    memory = system.add_memory(
+        content=text,
+        user_id=user_id,
+        memory_type=MemoryType(memory_type),
+        confidence=confidence,
+        importance=importance,
+        freshness=freshness,
+    )
+
+    return {
+        "id": memory.id,
+        "user_id": memory.user_id,
+        "type": memory.type.value,
+        "content": memory.content,
+        "confidence": memory.confidence,
+        "importance": memory.importance,
+        "freshness": memory.freshness,
+        "status": memory.status.value,
+    }
 
 
 def retrieve_memory_context(query: str, user_id: str, top_k: int = 5) -> str:
-    """Used by the search_memory tool the agent calls mid-conversation —
-    logged here (rather than in tools.py) so the actual retrieved hits are
-    visible, not just the fact that the tool ran."""
     system = get_memory_system()
     hits = system.retrieve(query, user_id, top_k)
     context = system.context_formatter.format(
@@ -265,7 +291,11 @@ def force_dream(user_id: str) -> dict[str, Any]:
 
 
 def list_memories(user_id: str) -> list[dict[str, Any]]:
-    memories = _get_repository().find_by_user(user_id=user_id, active_only=False)
+    memories = _get_repository().find_by_user(
+        user_id=user_id,
+        active_only=True,
+    )
+
     return [
         {
             "id": m.id,

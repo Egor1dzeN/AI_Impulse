@@ -350,14 +350,25 @@ class MemoryInputRouter:
                 reason="casual_acknowledgement",
             )
 
-        if self.is_question(text):
-            return InputRoute(
-                kind="DROP",
-                candidates=[],
-                reason="question",
-            )
+        if "?" in text:
+            sentences = self.split_sentences(text)
 
-        sentences = self.split_sentences(text)
+            sentences = [
+                sentence
+                for sentence in sentences
+                if "?" not in sentence
+            ]
+
+            if not sentences:
+                return InputRoute(
+                    kind="DROP",
+                    candidates=[],
+                    reason="question",
+                )
+
+            text = " ".join(sentences)
+        else:
+            sentences = [text]
 
         # ---------------------------------------------------------
         # One sentence

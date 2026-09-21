@@ -110,22 +110,28 @@ def delete_conversation(conversation_id: str, user_id: str = Depends(auth.get_cu
 
 @app.post("/api/chat")
 def chat(
-    req: ChatRequest,
-    background_tasks: BackgroundTasks,
-    user_id: str = Depends(auth.get_current_user_id),
+        req: ChatRequest,
+        background_tasks: BackgroundTasks,
+        user_id: str = Depends(auth.get_current_user_id),
 ) -> StreamingResponse:
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="empty message")
 
     conversations.assert_owned(req.conversation_id, user_id)
 
+    # Формируем расширенное сообщение для подачи в LLM
+    augmented_message = f"{req.message}\n\nНе забудь посмотреть в память, вдруг там что-то важное" ################### Костыль
+
     def event_stream():
+        # Передаем дополненное сообщение (augmented_message) агенту
         for event in agent.handle_chat_turn_stream(
-            user_id, req.conversation_id, req.message, enable_thinking=req.enable_thinking
+                user_id, req.conversation_id, augmented_message, enable_thinking=req.enable_thinking
         ):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     response = StreamingResponse(event_stream(), media_type="text/event-stream")
+
+    # Оригинальное сообщение (req.message) отправляем в memory_bridge
     background_tasks.add_task(agent.extract_memory_background, user_id, req.message)
     response.background = background_tasks
     return response

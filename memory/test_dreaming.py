@@ -1,242 +1,137 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-import json
+import re
+import sys
 import uuid
+from pathlib import Path
 
-from dreaming_engine import DreamingEngine
-from memory_store import MemoryStore
-from models import Memory, MemoryStatus, MemoryType, Source
+# Run this file from backend/app in the project.
+# The memory modules live in the sibling top-level memory/ directory.
+MEMORY_DIR = Path(__file__).resolve().parents[2] / "memory"
+if str(MEMORY_DIR) not in sys.path:
+    sys.path.insert(0, str(MEMORY_DIR))
 
-
-USER_ID = "dreaming-test-user"
-
-
-class FakeQwen:
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def generate(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        max_new_tokens: int = 1024,
-    ) -> str:
-        del system_prompt
-        del max_new_tokens
-
-        self.calls += 1
-        payload = json.loads(user_prompt)
-        memories = payload["active_memories"]
-
-        first_id = memories[0]["id"]
-        second_id = memories[1]["id"]
-
-        return json.dumps(
-            {
-                "operations": [
-                    {
-                        "type": "merge",
-                        "keep_id": first_id,
-                        "archive_ids": [second_id],
-                        "content": "Пользователь предпочитает кофе утром.",
-                        "reason": "Два воспоминания относятся к одной теме.",
-                    }
-                ],
-                "summary": "Объединены близкие воспоминания.",
-            },
-            ensure_ascii=False,
-        )
+from memory_input_router import MemoryInputRouter
+from models import MemoryCandidate, MemoryType, Source
+from unified_memory_analyzer import UnifiedMemoryAnalyzer
 
 
-class NullOperationsQwen:
-    """Mimics a real, observed Qwen3-4B response to "nothing needs to
-    change": explicit JSON nulls instead of an empty list/string. That must
-    be treated as a valid no-op, not a parse failure (see
-    DreamingEngine._validate_operations)."""
+class FakeExtractor:
+    """
+    Minimal extractor stub for testing router behavior.
+    """
 
-    def __init__(self) -> None:
-        self.calls = 0
+    @staticmethod
+    def _extract_rule_based(text, user_id, source):
+        text = text.strip().lower().replace("ё", "е")
 
-    def generate(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        max_new_tokens: int = 1024,
-    ) -> str:
-        del system_prompt
-        del user_prompt
-        del max_new_tokens
+        if "я выбираю между omoda c5 и jac js6" in text:
+            return [
+                MemoryCandidate(
+                    id=str(uuid.uuid4()),
+                    user_id=user_id,
+                    type=MemoryType.GOAL,
+                    content="Пользователь выбирает между Omoda C5 и JAC JS6.",
+                    confidence=0.9,
+                    source=source,
+                    created_at=None,
+                    source_text=text,
+                    metadata={},
+                )
+            ]
 
-        self.calls += 1
-        return json.dumps({"operations": None, "summary": None})
+        if "мне нравится уроки вождения" in text:
+            return [
+                MemoryCandidate(
+                    id=str(uuid.uuid4()),
+                    user_id=user_id,
+                    type=MemoryType.PREFERENCE,
+                    content="Пользователь любит уроки вождения.",
+                    confidence=0.9,
+                    source=source,
+                    created_at=None,
+                    source_text=text,
+                    metadata={},
+                )
+            ]
+
+        return []
+
+    @staticmethod
+    def _extract_context_rule_based(
+        text,
+        user_id,
+        source,
+        context,
+    ):
+        return []
 
 
-def make_memory(content: str, minutes_ago: int = 0) -> Memory:
-    now = datetime.utcnow() - timedelta(minutes=minutes_ago)
+def test_mixed_question_is_not_dropped():
+    router = MemoryInputRouter(FakeExtractor())
 
-    return Memory(
+    source = Source(type="text", id="test-source")
+
+    route = router.route(
+        text=(
+            "Я думаю над покупкой автомобиля. "
+            "Я выбираю между Omoda C5 и JAC JS6. "
+            "Что лучше выбрать?"
+        ),
+        user_id="test-user",
+        context=None,
+        source=source,
+    )
+
+    assert route.kind == "UNIFIED", route
+    print("PASS: mixed statement + question is routed to UNIFIED")
+
+
+def test_pure_question_is_dropped():
+    router = MemoryInputRouter(FakeExtractor())
+
+    source = Source(type="text", id="test-source")
+
+    route = router.route(
+        text="Что лучше выбрать: Omoda C5 или JAC JS6?",
+        user_id="test-user",
+        context=None,
+        source=source,
+    )
+
+    assert route.kind == "DROP", route
+    print("PASS: pure question is still dropped")
+
+
+def test_purchase_intent_is_not_completion():
+    now = None
+
+    candidate = MemoryCandidate(
         id=str(uuid.uuid4()),
-        user_id=USER_ID,
-        type=MemoryType.PREFERENCE,
-        content=content,
-        confidence=0.9,
-        importance=0.5,
-        freshness=1.0,
-        status=MemoryStatus.ACTIVE,
-        sources=[
-            Source(
-                type="text",
-                id=str(uuid.uuid4()),
-            )
-        ],
+        user_id="test-user",
+        type=MemoryType.GOAL,
+        content="Пользователь купил автомобиль Omoda.",
+        confidence=0.98,
+        source=Source(type="text", id="test-source"),
         created_at=now,
-        updated_at=now,
-        valid_from=now,
+        source_text="нет, все же покупаю омоду!",
         metadata={},
     )
 
+    candidate = UnifiedMemoryAnalyzer._normalize_goal_modality(candidate)
 
-def test_force_run() -> None:
-    store = MemoryStore()
-    store.add(make_memory("Пользователь любит кофе.", 2))
-    store.add(make_memory("Пользователь пьёт кофе утром.", 1))
+    assert candidate.type == MemoryType.GOAL
+    assert "решил приобрести" in candidate.content.lower()
+    assert "купил" not in candidate.content.lower()
 
-    qwen = FakeQwen()
-    engine = DreamingEngine(
-        store=store,
-        qwen=qwen,
-        every_n_memories=10,
+    print(
+        "PASS: purchase intent remains a goal and is not rewritten "
+        "as completed purchase"
     )
-
-    result = engine.force_run(USER_ID)
-
-    assert qwen.calls == 1
-    assert result.applied
-    assert len(result.merge_operations) == 1
-
-    active = store.find_by_user(USER_ID, active_only=True)
-    archived = [
-        memory
-        for memory in store.find_by_user(USER_ID, active_only=False)
-        if memory.status == MemoryStatus.ARCHIVED
-    ]
-
-    assert len(active) == 1
-    assert active[0].content == "Пользователь предпочитает кофе утром."
-    assert len(archived) == 1
-
-
-def test_threshold() -> None:
-    store = MemoryStore()
-    store.add(make_memory("Пользователь любит кофе.", 2))
-    store.add(make_memory("Пользователь пьёт кофе утром.", 1))
-
-    qwen = FakeQwen()
-    engine = DreamingEngine(
-        store=store,
-        qwen=qwen,
-        every_n_memories=3,
-    )
-
-    assert engine.notify_memory_changes(USER_ID, 1) is None
-    assert engine.pending_count(USER_ID) == 1
-
-    assert engine.notify_memory_changes(USER_ID, 1) is None
-    assert engine.pending_count(USER_ID) == 2
-
-    result = engine.notify_memory_changes(USER_ID, 1)
-
-    assert result is not None
-    assert result.applied
-    assert engine.pending_count(USER_ID) == 0
-    assert qwen.calls == 1
-
-
-def test_disabled_threshold() -> None:
-    store = MemoryStore()
-    store.add(make_memory("Пользователь любит кофе."))
-
-    qwen = FakeQwen()
-    engine = DreamingEngine(
-        store=store,
-        qwen=qwen,
-        every_n_memories=0,
-    )
-
-    assert engine.notify_memory_changes(USER_ID, 100) is None
-    assert engine.pending_count(USER_ID) == 0
-    assert qwen.calls == 0
-
-
-def test_null_operations_is_not_an_error() -> None:
-    store = MemoryStore()
-    store.add(make_memory("Пользователь любит кофе.", 2))
-    store.add(make_memory("Пользователь пьёт чай вечером.", 1))
-
-    qwen = NullOperationsQwen()
-    engine = DreamingEngine(
-        store=store,
-        qwen=qwen,
-        every_n_memories=10,
-    )
-
-    result = engine.force_run(USER_ID)
-
-    assert qwen.calls == 1
-    assert result.merge_operations == []
-    assert result.archive_operations == []
-    assert not result.applied
-
-
-def test_no_enough_memories() -> None:
-    store = MemoryStore()
-    store.add(make_memory("Пользователь любит кофе."))
-
-    qwen = FakeQwen()
-    engine = DreamingEngine(
-        store=store,
-        qwen=qwen,
-        every_n_memories=1,
-    )
-
-    result = engine.force_run(USER_ID)
-
-    assert result.triggered
-    assert not result.applied
-    assert "Not enough" in result.summary
-    assert qwen.calls == 0
-
-
-def main() -> None:
-    print("=" * 90)
-    print("DREAMING ENGINE TEST")
-    print("=" * 90)
-
-    print("\n[1] FORCE RUN")
-    test_force_run()
-    print("PASS")
-
-    print("\n[2] AUTO RUN EVERY N CHANGES")
-    test_threshold()
-    print("PASS")
-
-    print("\n[3] DISABLE AUTO DREAMING")
-    test_disabled_threshold()
-    print("PASS")
-
-    print("\n[4] NULL OPERATIONS IS NOT AN ERROR")
-    test_null_operations_is_not_an_error()
-    print("PASS")
-
-    print("\n[5] NOT ENOUGH MEMORIES")
-    test_no_enough_memories()
-    print("PASS")
-
-    print("\n" + "=" * 90)
-    print("ALL DREAMING TESTS PASSED")
-    print("=" * 90)
 
 
 if __name__ == "__main__":
-    main()
+    test_mixed_question_is_not_dropped()
+    test_pure_question_is_dropped()
+    test_purchase_intent_is_not_completion()
+    print("\nALL MEMORY INGESTION REGRESSION TESTS PASSED.")

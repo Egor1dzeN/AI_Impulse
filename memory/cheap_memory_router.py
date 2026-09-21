@@ -67,9 +67,6 @@ class CheapMemoryRouter:
         if normalized in self.CASUAL_EXACT:
             return MemoryRoute.SKIP
 
-        if self.QUESTION_MARK_PATTERN.search(text):
-            return MemoryRoute.SKIP
-
         if self.QUESTION_START_PATTERN.search(text):
             return MemoryRoute.SKIP
 

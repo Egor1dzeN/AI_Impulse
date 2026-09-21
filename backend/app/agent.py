@@ -125,6 +125,7 @@ def handle_chat_turn_stream(
         today=date.today().isoformat(),
         intervals_icu_connected=bool(user_settings.get_intervals_icu_key(user_id)),
         google_calendar_connected=bool(user_settings.get_google_calendar_refresh_token(user_id)),
+        gmail_connected=bool(user_settings.get_gmail_refresh_token(user_id)),
     )
     history = _load_recent_history(user_id, conversation_id)
     logger.info("chat turn: loaded %d short-term history message(s) for conversation_id=%s", len(history), conversation_id)

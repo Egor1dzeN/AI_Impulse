@@ -815,6 +815,68 @@ body.is-chat .dock{ transform:none }
   color:var(--ink-faint);
 }
 
+.email-draft{
+  margin-top:10px;
+  width:100%;
+  max-width:420px;
+  padding:14px 16px;
+  border:1px solid var(--line);
+  border-radius:14px;
+  background:var(--paper-soft);
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+}
+.email-draft__title{
+  font-size:12.5px;
+  font-weight:600;
+  text-transform:uppercase;
+  letter-spacing:.04em;
+  color:var(--ink-soft);
+}
+.email-draft__field{
+  font-size:13px;
+  display:flex;
+  flex-direction:column;
+  gap:3px;
+}
+.email-draft__field span{
+  color:var(--ink-faint);
+}
+.email-draft__field input,
+.email-draft__body{
+  margin:0;
+  padding:8px 10px;
+  border-radius:10px;
+  background:var(--paper);
+  border:1px solid var(--line);
+  font-size:13.5px;
+  font-family:inherit;
+  color:var(--ink);
+  width:100%;
+}
+.email-draft__field input:focus,
+.email-draft__body:focus{
+  outline:none;
+  border-color:var(--flare);
+}
+.email-draft__field input:disabled,
+.email-draft__body:disabled{
+  color:var(--ink-soft);
+  background:var(--paper-soft);
+}
+.email-draft__body{
+  resize:vertical;
+  max-height:280px;
+  overflow-y:auto;
+  line-height:1.4;
+}
+.email-draft__sent{
+  font-size:13px;
+  font-weight:500;
+  color:#2ecc71;
+}
+
 /* ── Панель памяти ───────────────────────────────────────────────── */
 
 .memory-panel{
@@ -900,7 +962,13 @@ body.is-chat .dock{ transform:none }
 }
 .tooltip__bubble{
   position:absolute;
-  bottom:calc(100% + 9px);
+  /* Opens downward, not upward: this sits inside .memory-panel__body,
+     which has overflow-y:auto — per the CSS overflow spec, setting only
+     one axis forces the other to a non-"visible" computed value too, so a
+     bubble opening upward near the top of that scroll container (e.g. the
+     "Reflect" button right under the panel header) had no room and got
+     clipped by the container instead of just floating outside it. */
+  top:calc(100% + 9px);
   right:0;
   width:max-content;
   max-width:220px;
@@ -913,7 +981,7 @@ body.is-chat .dock{ transform:none }
   text-align:left;
   box-shadow:0 12px 24px -12px rgba(36,26,20,.35);
   opacity:0;
-  transform:translateY(4px);
+  transform:translateY(-4px);
   pointer-events:none;
   transition:opacity .15s ease, transform .15s ease;
   z-index:5;
@@ -921,10 +989,10 @@ body.is-chat .dock{ transform:none }
 .tooltip__bubble::after{
   content:'';
   position:absolute;
-  top:100%;
+  bottom:100%;
   right:10px;
   border:5px solid transparent;
-  border-top-color:var(--ink);
+  border-bottom-color:var(--ink);
 }
 .tooltip:hover .tooltip__bubble,
 .tooltip:focus-within .tooltip__bubble{

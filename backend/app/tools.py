@@ -9,7 +9,7 @@ from typing import Any
 import requests
 from langchain_core.tools import BaseTool, tool
 
-from . import db, google_calendar, memory_bridge, user_settings
+from . import db, gmail, google_calendar, memory_bridge, user_settings
 
 MEMORY_TOOL_NAME = "search_memory"
 
@@ -51,6 +51,34 @@ def list_calendar_events_impl(refresh_token: str, date: str, days: int = 1) -> d
     """Read events from the user's own Google Calendar — the read-side
     counterpart to create_calendar_event_impl above."""
     return {"events": google_calendar.list_events(refresh_token=refresh_token, date=date, days=days)}
+
+
+# ============================================================
+# TOPIC 1b — EMAIL (GMAIL)
+# ============================================================
+#
+# Deliberately asymmetric with the calendar tools above: there is NO
+# send_email_impl / send tool exposed to the agent at all. draft_email_impl
+# only prepares the content and hands it to the frontend as an artifact
+# card with its own "Send" button — actually calling gmail.send_message
+# happens exclusively in main.py's POST /api/gmail/send, triggered by that
+# button, never by the agent's own tool-calling loop. Sending mail is an
+# irreversible action visible to a third party, so confirmation here is a
+# real UI gate, not just a system-prompt instruction the model could ignore
+# or misfire on (as GigaChat-2's JSON-formatting quirks already showed
+# elsewhere in this codebase — see memory/gigachat_text_model.py).
+
+
+def list_emails_impl(refresh_token: str, query: str = "", max_results: int = 10) -> dict[str, Any]:
+    return {"emails": gmail.list_messages(refresh_token=refresh_token, query=query, max_results=max_results)}
+
+
+def get_email_impl(refresh_token: str, message_id: str) -> dict[str, Any]:
+    return gmail.get_message(refresh_token=refresh_token, message_id=message_id)
+
+
+def draft_email_impl(to: str, subject: str, body: str) -> dict[str, Any]:
+    return {"draft_id": db.new_id(), "to": to, "subject": subject, "body": body}
 
 
 def list_tasks_impl(user_id: str) -> dict[str, Any]:
@@ -664,6 +692,30 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
 
         calendar_tools = [create_calendar_event, get_calendar_events]
 
+    email_tools: list[BaseTool] = []
+    gmail_refresh_token = user_settings.get_gmail_refresh_token(user_id)
+    if gmail_refresh_token:
+
+        @tool
+        def list_emails(query: str = "", max_results: int = 10) -> dict:
+            """Посмотреть список писем в почте пользователя (Gmail). Вызывай, когда пользователь спрашивает про свою почту/письма ("есть новые письма?", "что писал Иван", "покажи письма от банка"). query — поисковый запрос в синтаксисе Gmail (необязательно): "from:иван", "is:unread", "subject:счёт", можно комбинировать через пробел; пустая строка — просто последние письма во входящих. Возвращает id, from, subject, date, snippet (короткий отрывок) для каждого письма — snippet может быть недостаточно, чтобы ответить на вопрос о содержимом письма, тогда вызови get_email с нужным id."""
+            return list_emails_impl(refresh_token=gmail_refresh_token, query=query, max_results=max_results)
+
+        @tool
+        def get_email(message_id: str) -> dict:
+            """Получить полный текст одного письма по id (из list_emails). Вызывай, когда пользователю нужно содержимое конкретного письма, а не только тема/отправитель/дата. Если found=false — письмо не существует (id устарел или придуман), сообщи об этом и предложи посмотреть list_emails заново."""
+            return get_email_impl(refresh_token=gmail_refresh_token, message_id=message_id)
+
+        @tool(response_format="content_and_artifact")
+        def draft_email(to: str, subject: str, body: str) -> tuple[str, dict]:
+            """Подготовить черновик письма для отправки через Gmail пользователя. Вызывай ТОЛЬКО когда пользователь явно просит написать/отправить письмо, и только после того как ты уже знаешь адрес получателя, тему и текст (при необходимости уточни их у пользователя или найди адрес через search_memory/list_emails, прежде чем вызывать). to — email получателя. subject — тема. body — полный текст письма на языке пользователя, готовый к отправке, без плейсхолдеров.
+
+ВАЖНО: эта функция НЕ отправляет письмо. Она только показывает пользователю черновик с кнопкой «Отправить» — реальная отправка происходит, только когда пользователь сам нажмёт эту кнопку. После вызова НИКОГДА не говори, что письмо отправлено или что ты его отправил — просто сообщи, что черновик готов и показан пользователю на подтверждение. Не вызывай draft_email повторно для того же письма, если пользователь явно не попросил его изменить."""
+            result = draft_email_impl(to=to, subject=subject, body=body)
+            return "Черновик подготовлен и показан пользователю для подтверждения отправки.", result
+
+        email_tools = [list_emails, get_email, draft_email]
+
     @tool
     def show_map(place: str) -> dict:
         """Показать место на карте прямо в чате. Вызывай ТОЛЬКО когда пользователь явно просит показать карту или спрашивает "где находится X" — простое упоминание места в разговоре (например "я живу в X") не повод её вызывать. Если пользователь просит именно маршрут/путь/сколько ехать из одного места в другое — используй build_route, а не эту функцию. place — только реальное название места. Если пользователь не назвал место явно (например "покажи на карте где я живу") — сначала вызови search_memory, чтобы узнать место из памяти, и передай сюда именно то, что она вернула, слово в слово. Никогда не придумывай и не дописывай место от себя — если в памяти его нет, не вызывай эту функцию, а спроси пользователя. После вызова не добавляй в ответ данные из других функций (погоду, курс и т.п.), если их не просили."""
@@ -708,6 +760,7 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
         get_health_summary,
         *intervals_tools,
         *calendar_tools,
+        *email_tools,
         show_map,
         build_route,
         get_weather,

@@ -26,7 +26,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, Uplo
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, StreamingResponse
 
-from . import agent, auth, conversations, db, google_calendar, mcp_tools, memory_bridge, tools, transcription, user_settings
+from . import agent, auth, conversations, db, gmail, google_calendar, mcp_tools, memory_bridge, tools, transcription, user_settings
 from .schemas import (
     AddMemoryRequest,
     ChatMessageOut,
@@ -38,6 +38,7 @@ from .schemas import (
     MemorySearchOut,
     RegisterRequest,
     SandboxOut,
+    SendEmailRequest,
     SettingsOut,
     TokenOut,
     UpdateSettingsRequest,
@@ -262,3 +263,55 @@ def google_calendar_disconnect(user_id: str = Depends(auth.get_current_user_id))
         google_calendar.revoke(refresh_token)
         user_settings.set_google_calendar_refresh_token(user_id, None)
     return user_settings.get_settings(user_id)
+
+
+@app.get("/api/gmail/connect")
+def gmail_connect(user_id: str = Depends(auth.get_current_user_id)) -> dict:
+    if not gmail.gmail_is_configured():
+        raise HTTPException(status_code=503, detail="Gmail is not configured on this server")
+    return {"url": gmail.build_authorize_url(gmail.create_state(user_id))}
+
+
+@app.get("/api/gmail/callback")
+def gmail_callback(code: str | None = None, state: str | None = None, error: str | None = None):
+    if error or not code or not state:
+        return RedirectResponse(f"{FRONTEND_URL}/?gmail=error")
+
+    user_id = gmail.decode_state(state)
+    try:
+        refresh_token = gmail.exchange_code_for_refresh_token(code)
+        user_settings.set_gmail_refresh_token(user_id, refresh_token)
+    except (RuntimeError, ValueError):
+        logger.exception("Gmail connect failed for user_id=%s", user_id)
+        return RedirectResponse(f"{FRONTEND_URL}/?gmail=error")
+
+    return RedirectResponse(f"{FRONTEND_URL}/?gmail=connected")
+
+
+@app.post("/api/gmail/disconnect")
+def gmail_disconnect(user_id: str = Depends(auth.get_current_user_id)) -> dict:
+    refresh_token = user_settings.get_gmail_refresh_token(user_id)
+    if refresh_token:
+        gmail.revoke(refresh_token)
+        user_settings.set_gmail_refresh_token(user_id, None)
+    return user_settings.get_settings(user_id)
+
+
+@app.post("/api/gmail/send")
+def gmail_send(req: SendEmailRequest, user_id: str = Depends(auth.get_current_user_id)) -> dict:
+    """The ONLY code path that actually calls gmail.send_message — reachable
+    exclusively from the frontend's own "Send" button on a draft_email
+    artifact card (see tools.py's TOPIC 1b comment), never from the agent's
+    tool-calling loop. draft_already_sent() makes a repeat click (e.g. after
+    a page refresh re-renders an old draft card) a safe no-op instead of a
+    duplicate email."""
+    refresh_token = user_settings.get_gmail_refresh_token(user_id)
+    if not refresh_token:
+        raise HTTPException(status_code=400, detail="Gmail is not connected")
+
+    if gmail.draft_already_sent(req.draft_id):
+        return {"already_sent": True}
+
+    result = gmail.send_message(refresh_token=refresh_token, to=req.to, subject=req.subject, body=req.body)
+    gmail.mark_draft_sent(req.draft_id, user_id)
+    return {"already_sent": False, **result}

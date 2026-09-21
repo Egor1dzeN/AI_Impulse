@@ -70,12 +70,14 @@ export default function App() {
     window.addEventListener('resize', () => lift(true));
   }, []);
 
-  // Google's OAuth redirect lands back here with ?google_calendar=... (see
-  // main.py's /api/google-calendar/callback) — reopen Settings so the
-  // result (SettingsPanel reads/clears the same param) is actually visible
-  // instead of landing silently on the chat screen.
+  // Google's OAuth redirect lands back here with ?google_calendar=... or
+  // ?gmail=... (see main.py's /api/google-calendar/callback and
+  // /api/gmail/callback) — reopen Settings so the result (SettingsPanel
+  // reads/clears the same params) is actually visible instead of landing
+  // silently on the chat screen.
   useEffect(() => {
-    if (new URLSearchParams(window.location.search).has('google_calendar')) {
+    const params = new URLSearchParams(window.location.search);
+    if (params.has('google_calendar') || params.has('gmail')) {
       setSettingsOpen(true);
     }
   }, []);

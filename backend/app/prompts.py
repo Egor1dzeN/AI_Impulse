@@ -136,6 +136,36 @@ CALENDAR_NOT_CONNECTED_INSTRUCTIONS = (
     "как обычно."
 )
 
+EMAIL_INSTRUCTIONS = (
+    "Функции list_emails/get_email читают реальную почту пользователя "
+    "(Gmail) — вызывай их только когда пользователь явно спрашивает про "
+    "письма/почту. list_emails по умолчанию показывает только тему/"
+    "отправителя/дату/короткий отрывок; если этого недостаточно, чтобы "
+    "ответить на вопрос о содержимом письма — вызови get_email с его id.\n\n"
+    "draft_email готовит черновик письма и показывает его пользователю с "
+    "кнопкой «Отправить» — ЭТА ФУНКЦИЯ НЕ ОТПРАВЛЯЕТ ПИСЬМО САМА. Вызывай "
+    "её только когда пользователь явно просит написать/отправить письмо, и "
+    "только после того как у тебя есть адрес получателя (уточни у "
+    "пользователя или найди через search_memory/list_emails), тема и "
+    "полный текст письма — не вызывай с пустыми/придуманными полями. После "
+    "вызова НИКОГДА не говори, что письмо отправлено или что ты его "
+    "отправил, — реальную отправку делает только сам пользователь нажатием "
+    "кнопки в интерфейсе. Просто сообщи, что черновик готов и показан на "
+    "подтверждение. Не вызывай draft_email повторно для того же письма без "
+    "явной просьбы пользователя что-то в нём изменить."
+)
+
+# Mirrors WORKOUT_NOT_CONNECTED_INSTRUCTIONS — see its comment for why this
+# exists at all (tools.py never adds list_emails/get_email/draft_email to
+# the list without a saved refresh token, and the model needs to know why).
+EMAIL_NOT_CONNECTED_INSTRUCTIONS = (
+    "У этого пользователя НЕ подключён Gmail (нет функций list_emails/"
+    "get_email/draft_email в списке доступных). Если пользователь просит "
+    "прочитать/написать/отправить письмо — не используй вместо этого "
+    "другие функции и не выдумывай ответ. Сразу ответь текстом, что Gmail "
+    "не подключён, и предложи подключить его в настройках приложения."
+)
+
 TOOL_CALL_FORMAT = (
     "Если нужно вызвать функцию — ответь ТОЛЬКО одним блоком вида:\n"
     "```tool_call\n"
@@ -149,7 +179,10 @@ TOOL_CALL_FORMAT = (
 
 
 def build_system_prompt(
-    today: str, intervals_icu_connected: bool = False, google_calendar_connected: bool = False
+    today: str,
+    intervals_icu_connected: bool = False,
+    google_calendar_connected: bool = False,
+    gmail_connected: bool = False,
 ) -> str:
     return "\n\n".join(
         [
@@ -160,6 +193,7 @@ def build_system_prompt(
             INFO_TOOL_INSTRUCTIONS,
             WORKOUT_INSTRUCTIONS if intervals_icu_connected else WORKOUT_NOT_CONNECTED_INSTRUCTIONS,
             CALENDAR_INSTRUCTIONS if google_calendar_connected else CALENDAR_NOT_CONNECTED_INSTRUCTIONS,
+            EMAIL_INSTRUCTIONS if gmail_connected else EMAIL_NOT_CONNECTED_INSTRUCTIONS,
             TOOL_CALL_FORMAT.format(today=today),
         ]
     )

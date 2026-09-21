@@ -1,5 +1,12 @@
 import { useEffect, useState } from 'react';
-import { disconnectGoogleCalendar, fetchSettings, getGoogleCalendarConnectUrl, updateSettings } from '../lib/api';
+import {
+  disconnectGmail,
+  disconnectGoogleCalendar,
+  fetchSettings,
+  getGmailConnectUrl,
+  getGoogleCalendarConnectUrl,
+  updateSettings,
+} from '../lib/api';
 import { applyTheme, getTheme, setTheme as persistTheme } from '../lib/settings';
 import { useI18n } from '../lib/i18n.jsx';
 
@@ -28,6 +35,11 @@ export default function SettingsPanel({ open, onClose }) {
   const [gcalDisconnecting, setGcalDisconnecting] = useState(false);
   const [gcalError, setGcalError] = useState('');
 
+  const [gmailConnected, setGmailConnected] = useState(null);
+  const [gmailConnecting, setGmailConnecting] = useState(false);
+  const [gmailDisconnecting, setGmailDisconnecting] = useState(false);
+  const [gmailError, setGmailError] = useState('');
+
   useEffect(() => {
     if (!open) return;
     setError('');
@@ -38,10 +50,12 @@ export default function SettingsPanel({ open, onClose }) {
       .then((s) => {
         setConnected(s.intervals_icu_connected);
         setGcalConnected(s.google_calendar_connected);
+        setGmailConnected(s.gmail_connected);
       })
       .catch(() => {
         setConnected(null);
         setGcalConnected(null);
+        setGmailConnected(null);
       })
       .finally(() => setLoading(false));
   }, [open]);
@@ -52,15 +66,27 @@ export default function SettingsPanel({ open, onClose }) {
   // panel + report the outcome instead of leaving it as a silent no-op.
   useEffect(() => {
     const params = new URLSearchParams(window.location.search);
-    const result = params.get('google_calendar');
-    if (!result) return;
-    params.delete('google_calendar');
-    const rest = params.toString();
-    window.history.replaceState({}, '', window.location.pathname + (rest ? `?${rest}` : ''));
-    if (result === 'connected') {
-      setGcalConnected(true);
-    } else if (result === 'error') {
-      setGcalError(t('settings.googleCalendarConnectError'));
+    let changed = false;
+
+    const gcalResult = params.get('google_calendar');
+    if (gcalResult) {
+      params.delete('google_calendar');
+      changed = true;
+      if (gcalResult === 'connected') setGcalConnected(true);
+      else if (gcalResult === 'error') setGcalError(t('settings.googleCalendarConnectError'));
+    }
+
+    const gmailResult = params.get('gmail');
+    if (gmailResult) {
+      params.delete('gmail');
+      changed = true;
+      if (gmailResult === 'connected') setGmailConnected(true);
+      else if (gmailResult === 'error') setGmailError(t('settings.gmailConnectError'));
+    }
+
+    if (changed) {
+      const rest = params.toString();
+      window.history.replaceState({}, '', window.location.pathname + (rest ? `?${rest}` : ''));
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -128,6 +154,32 @@ export default function SettingsPanel({ open, onClose }) {
       // leave the current state on screen if the request failed
     } finally {
       setGcalDisconnecting(false);
+    }
+  }
+
+  async function connectGmail() {
+    if (gmailConnecting) return;
+    setGmailConnecting(true);
+    setGmailError('');
+    try {
+      const { url } = await getGmailConnectUrl();
+      window.location.href = url;
+    } catch {
+      setGmailError(t('settings.gmailConnectError'));
+      setGmailConnecting(false);
+    }
+  }
+
+  async function disconnectGmailClick() {
+    if (gmailDisconnecting) return;
+    setGmailDisconnecting(true);
+    try {
+      const s = await disconnectGmail();
+      setGmailConnected(s.gmail_connected);
+    } catch {
+      // leave the current state on screen if the request failed
+    } finally {
+      setGmailDisconnecting(false);
     }
   }
 
@@ -243,6 +295,34 @@ export default function SettingsPanel({ open, onClose }) {
                 {gcalConnected ? t('settings.googleCalendarConnectedHint') : t('settings.googleCalendarConnectHint')}
               </p>
               {gcalError && <p className="settings-panel__hint settings-panel__hint--error">{gcalError}</p>}
+            </>
+          )}
+        </section>
+
+        <section>
+          {loading && <p className="settings-panel__hint">{t('common.loading')}</p>}
+
+          {!loading && (
+            <>
+              <div className="service-row">
+                <div className="service-row__title">
+                  <span className={`service-row__dot${gmailConnected ? '' : ' service-row__dot--off'}`} />
+                  Gmail
+                </div>
+                {gmailConnected ? (
+                  <button type="button" className="ghost" onClick={disconnectGmailClick} disabled={gmailDisconnecting}>
+                    {gmailDisconnecting ? t('settings.disconnecting') : t('settings.disconnect')}
+                  </button>
+                ) : (
+                  <button type="button" className="ghost" onClick={connectGmail} disabled={gmailConnecting}>
+                    {gmailConnecting ? t('settings.connecting') : t('settings.connect')}
+                  </button>
+                )}
+              </div>
+              <p className="settings-panel__hint">
+                {gmailConnected ? t('settings.gmailConnectedHint') : t('settings.gmailConnectHint')}
+              </p>
+              {gmailError && <p className="settings-panel__hint settings-panel__hint--error">{gmailError}</p>}
             </>
           )}
         </section>

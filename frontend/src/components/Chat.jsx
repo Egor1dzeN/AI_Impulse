@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { md } from '../lib/markdown';
 import { getLanguage, translate, useI18n } from '../lib/i18n.jsx';
+import { sendEmail } from '../lib/api';
 import MapboxMap from './MapboxMap';
 
 // Shown instead of the plain dots while waiting for the first token —
@@ -41,7 +42,7 @@ function ThinkingIndicator() {
 
 function ActionBadge({ action }) {
   const { t } = useI18n();
-  if (!action || action.tool === 'show_map' || action.tool === 'build_route' || action.tool === 'get_workout_route') return null;
+  if (!action || action.tool === 'show_map' || action.tool === 'build_route' || action.tool === 'get_workout_route' || action.tool === 'draft_email') return null;
   const label = t('chat.actions')[action.tool] || action.tool;
   return (
     <div className="action-badge">
@@ -166,6 +167,63 @@ function WorkoutRouteEmbed({ action }) {
   );
 }
 
+// Only surface here — never sent by the agent itself (see tools.py's
+// draft_email / TOPIC 1b comment and main.py's POST /api/gmail/send). This
+// button click is the one and only place an email actually goes out.
+function EmailDraftEmbed({ action }) {
+  const { t } = useI18n();
+  const [status, setStatus] = useState('idle'); // idle | sending | sent | error
+  const draft = action?.tool === 'draft_email' ? action.result : null;
+  // Seeded once from the tool's draft, then freely editable — onSend always
+  // uses this local copy, never the original draft.* values, so edits
+  // actually take effect.
+  const [to, setTo] = useState(draft?.to || '');
+  const [subject, setSubject] = useState(draft?.subject || '');
+  const [body, setBody] = useState(draft?.body || '');
+  if (!draft) return null;
+
+  const locked = status === 'sending' || status === 'sent';
+
+  const onSend = async () => {
+    setStatus('sending');
+    try {
+      await sendEmail({ draftId: draft.draft_id, to, subject, body });
+      setStatus('sent');
+    } catch {
+      setStatus('error');
+    }
+  };
+
+  return (
+    <div className="email-draft">
+      <div className="email-draft__title">{t('chat.emailDraftTitle')}</div>
+      <label className="email-draft__field">
+        <span>{t('chat.emailDraftTo')}</span>
+        <input type="email" value={to} onChange={(e) => setTo(e.target.value)} disabled={locked} />
+      </label>
+      <label className="email-draft__field">
+        <span>{t('chat.emailDraftSubject')}</span>
+        <input type="text" value={subject} onChange={(e) => setSubject(e.target.value)} disabled={locked} />
+      </label>
+      <textarea
+        className="email-draft__body"
+        value={body}
+        onChange={(e) => setBody(e.target.value)}
+        disabled={locked}
+        rows={Math.min(10, Math.max(3, body.split('\n').length))}
+      />
+      {status === 'sent' ? (
+        <div className="email-draft__sent">{t('chat.emailDraftSent')}</div>
+      ) : (
+        <button type="button" className="ghost" onClick={onSend} disabled={status === 'sending' || !to.trim() || !subject.trim()}>
+          {status === 'sending' ? t('chat.emailDraftSending') : t('chat.emailDraftSend')}
+        </button>
+      )}
+      {status === 'error' && <p className="settings-panel__hint settings-panel__hint--error">{t('chat.emailDraftError')}</p>}
+    </div>
+  );
+}
+
 function Copy({ text }) {
   const { t } = useI18n();
   const btnRef = useRef(null);
@@ -274,6 +332,7 @@ export default function Chat({ messages, scrollSignal, smoothScrollSignal }) {
               {m.status === 'done' && <MapEmbed action={m.action} />}
               {m.status === 'done' && <RouteEmbed action={m.action} />}
               {m.status === 'done' && <WorkoutRouteEmbed action={m.action} />}
+              {m.status === 'done' && <EmailDraftEmbed action={m.action} />}
               {m.status === 'done' && <ActionBadge action={m.action} />}
               {m.status === 'done' && <Copy text={m.content} />}
             </div>

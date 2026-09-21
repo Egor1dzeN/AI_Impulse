@@ -41,8 +41,22 @@ def set_google_calendar_refresh_token(user_id: str, refresh_token: str | None) -
             raise ValueError(f"no user with id={user_id!r} — log out and log back in")
 
 
+def get_gmail_refresh_token(user_id: str) -> str | None:
+    with db.get_conn() as conn:
+        row = conn.execute("SELECT gmail_refresh_token FROM users WHERE id = ?", (user_id,)).fetchone()
+    return row["gmail_refresh_token"] if row else None
+
+
+def set_gmail_refresh_token(user_id: str, refresh_token: str | None) -> None:
+    with db.get_conn() as conn:
+        cur = conn.execute("UPDATE users SET gmail_refresh_token = ? WHERE id = ?", (refresh_token, user_id))
+        if cur.rowcount == 0:
+            raise ValueError(f"no user with id={user_id!r} — log out and log back in")
+
+
 def get_settings(user_id: str) -> dict:
     return {
         "intervals_icu_connected": bool(get_intervals_icu_key(user_id)),
         "google_calendar_connected": bool(get_google_calendar_refresh_token(user_id)),
+        "gmail_connected": bool(get_gmail_refresh_token(user_id)),
     }

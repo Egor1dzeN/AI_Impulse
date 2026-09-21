@@ -125,6 +125,25 @@ export function disconnectGoogleCalendar() {
   }).then(json);
 }
 
+export function getGmailConnectUrl() {
+  return fetch(`${BASE}/api/gmail/connect`, { headers: authHeaders() }).then(json);
+}
+
+export function disconnectGmail() {
+  return fetch(`${BASE}/api/gmail/disconnect`, {
+    method: 'POST',
+    headers: authHeaders(),
+  }).then(json);
+}
+
+export function sendEmail({ draftId, to, subject, body }) {
+  return fetch(`${BASE}/api/gmail/send`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ draft_id: draftId, to, subject, body }),
+  }).then(json);
+}
+
 export function transcribeAudio(blob) {
   const form = new FormData();
   form.append('file', blob, 'voice.webm');

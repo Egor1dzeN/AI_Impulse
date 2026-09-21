@@ -8,7 +8,7 @@ from typing import Any, Iterator
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.errors import GraphRecursionError
 
-from . import agent_graph, conversations, db, memory_bridge
+from . import agent_graph, conversations, db, memory_bridge, user_settings
 from .prompts import build_system_prompt
 from .tools import MEMORY_TOOL_NAME
 
@@ -121,7 +121,11 @@ def handle_chat_turn_stream(
     )
 
     graph = agent_graph.build_graph(user_id, enable_thinking=enable_thinking)
-    system_prompt = build_system_prompt(today=date.today().isoformat())
+    system_prompt = build_system_prompt(
+        today=date.today().isoformat(),
+        intervals_icu_connected=bool(user_settings.get_intervals_icu_key(user_id)),
+        google_calendar_connected=bool(user_settings.get_google_calendar_refresh_token(user_id)),
+    )
     history = _load_recent_history(user_id, conversation_id)
     logger.info("chat turn: loaded %d short-term history message(s) for conversation_id=%s", len(history), conversation_id)
     inputs = {

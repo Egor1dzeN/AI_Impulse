@@ -70,6 +70,16 @@ export default function App() {
     window.addEventListener('resize', () => lift(true));
   }, []);
 
+  // Google's OAuth redirect lands back here with ?google_calendar=... (see
+  // main.py's /api/google-calendar/callback) — reopen Settings so the
+  // result (SettingsPanel reads/clears the same param) is actually visible
+  // instead of landing silently on the chat screen.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).has('google_calendar')) {
+      setSettingsOpen(true);
+    }
+  }, []);
+
   // Must run before Chat's own effects (which force-scroll on send) so the
   // feed is already visible/laid out by the time they read scrollHeight —
   // layout effects across the tree flush before any regular effects do,

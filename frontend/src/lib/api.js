@@ -110,3 +110,31 @@ export function updateSettings(payload) {
     body: JSON.stringify(payload),
   }).then(json);
 }
+
+// Returns the Google consent-screen URL; the caller does a full page
+// navigation to it (window.location.href), not a fetch — the OAuth
+// redirect dance needs the browser itself, not our SPA's XHR context.
+export function getGoogleCalendarConnectUrl() {
+  return fetch(`${BASE}/api/google-calendar/connect`, { headers: authHeaders() }).then(json);
+}
+
+export function disconnectGoogleCalendar() {
+  return fetch(`${BASE}/api/google-calendar/disconnect`, {
+    method: 'POST',
+    headers: authHeaders(),
+  }).then(json);
+}
+
+export function transcribeAudio(blob) {
+  const form = new FormData();
+  form.append('file', blob, 'voice.webm');
+  // No Content-Type header here on purpose — the browser sets
+  // multipart/form-data with the right boundary itself; setting it
+  // manually (as authHeaders({'Content-Type': ...}) would) breaks the
+  // boundary and the backend can't parse the upload.
+  return fetch(`${BASE}/api/transcribe`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: form,
+  }).then(json);
+}

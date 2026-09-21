@@ -72,6 +72,7 @@ class SandboxOut(BaseModel):
 
 class SettingsOut(BaseModel):
     intervals_icu_connected: bool
+    google_calendar_connected: bool
 
 
 class UpdateSettingsRequest(BaseModel):

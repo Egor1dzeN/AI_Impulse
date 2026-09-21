@@ -524,6 +524,13 @@ body.is-chat .dock{ transform:none }
 }
 .icon:hover{ color:var(--flare-deep); background:var(--flare-tint) }
 .icon--active{ color:var(--flare-deep); background:var(--flare-tint) }
+.icon:disabled{ opacity:.6; cursor:default }
+
+.composer__mic{ touch-action:none; user-select:none }
+.composer__mic--recording{ color:#e5484d; background:rgba(229,72,77,.12); animation:mic-pulse 1.4s ease-in-out infinite }
+@keyframes mic-pulse{ 0%,100%{ box-shadow:0 0 0 0 rgba(229,72,77,.35) } 50%{ box-shadow:0 0 0 6px rgba(229,72,77,0) } }
+.composer__mic-spinner{ animation:mic-spin .8s linear infinite }
+@keyframes mic-spin{ to{ transform:rotate(360deg) } }
 
 /* ── Выпадающее меню ─────────────────────────────────────────────── */
 
@@ -603,6 +610,7 @@ body.is-chat .dock{ transform:none }
   font-size:12px;
   color:var(--ink-faint);
 }
+.disclaimer--error{ color:var(--flare-deep) }
 
 /* ── Авторизация ─────────────────────────────────────────────────── */
 
@@ -1136,20 +1144,25 @@ body.is-chat .dock{ transform:none }
   font-weight:500;
 }
 
-.settings-connect{ display:flex; flex-direction:column; gap:10px }
-.settings-connect__status{
+.settings-connect{ display:flex; flex-direction:column; gap:10px; margin-top:10px }
+
+.service-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+}
+.service-row__title{
   display:flex;
   align-items:center;
   gap:8px;
-  padding:10px 12px;
-  border:1px solid var(--line);
-  border-radius:12px;
-  font-size:13.5px;
+  font-size:14.5px;
+  font-weight:500;
 }
-.settings-connect__dot{
+.service-row__dot{
   flex:none;
   width:8px; height:8px;
   border-radius:50%;
   background:#2ecc71;
 }
-.settings-connect__dot--off{ background:var(--ink-faint) }
+.service-row__dot--off{ background:var(--ink-faint) }

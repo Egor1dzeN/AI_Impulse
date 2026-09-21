@@ -22,11 +22,11 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
-from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
+from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import RedirectResponse, StreamingResponse
 
-from . import agent, auth, conversations, db, mcp_tools, memory_bridge, tools, user_settings
+from . import agent, auth, conversations, db, google_calendar, mcp_tools, memory_bridge, tools, transcription, user_settings
 from .schemas import (
     AddMemoryRequest,
     ChatMessageOut,
@@ -42,6 +42,10 @@ from .schemas import (
     TokenOut,
     UpdateSettingsRequest,
 )
+
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Impulse Agent API")
 
@@ -126,6 +130,18 @@ def chat(
     return response
 
 
+@app.post("/api/transcribe")
+async def transcribe(
+    file: UploadFile = File(...), user_id: str = Depends(auth.get_current_user_id)
+) -> dict:
+    audio_bytes = await file.read()
+    if not audio_bytes:
+        raise HTTPException(status_code=400, detail="empty audio file")
+    transcription.save_debug_copy(audio_bytes)
+    text = transcription.transcribe_audio(audio_bytes)
+    return {"text": text}
+
+
 @app.get("/api/history", response_model=list[ChatMessageOut])
 def history(conversation_id: str, user_id: str = Depends(auth.get_current_user_id)) -> list[dict]:
     conversations.assert_owned(conversation_id, user_id)
@@ -196,13 +212,53 @@ def get_settings(user_id: str = Depends(auth.get_current_user_id)) -> dict:
 def update_settings(req: UpdateSettingsRequest, user_id: str = Depends(auth.get_current_user_id)) -> dict:
     if req.intervals_icu_api_key is not None:
         key = req.intervals_icu_api_key.strip()
-        if key:
-            # Validate against Intervals.icu before saving — otherwise a
-            # typo'd key would only surface later, as a cryptic mid-chat
-            # tool failure, instead of an immediate error right here.
-            if not tools.intervals_icu_key_is_valid(key):
-                raise HTTPException(status_code=400, detail="invalid Intervals.icu API key")
-            user_settings.set_intervals_icu_key(user_id, key)
-        else:
-            user_settings.set_intervals_icu_key(user_id, None)
+        try:
+            if key:
+                # Validate against Intervals.icu before saving — otherwise a
+                # typo'd key would only surface later, as a cryptic mid-chat
+                # tool failure, instead of an immediate error right here.
+                if not tools.intervals_icu_key_is_valid(key):
+                    raise HTTPException(status_code=400, detail="invalid Intervals.icu API key")
+                user_settings.set_intervals_icu_key(user_id, key)
+            else:
+                user_settings.set_intervals_icu_key(user_id, None)
+        except ValueError as exc:
+            # Stale JWT for a user_id that no longer exists (e.g. after a
+            # DB reset) — surface it instead of silently no-oping the save.
+            raise HTTPException(status_code=401, detail=str(exc)) from exc
+    return user_settings.get_settings(user_id)
+
+
+@app.get("/api/google-calendar/connect")
+def google_calendar_connect(user_id: str = Depends(auth.get_current_user_id)) -> dict:
+    if not google_calendar.google_calendar_is_configured():
+        raise HTTPException(status_code=503, detail="Google Calendar is not configured on this server")
+    return {"url": google_calendar.build_authorize_url(google_calendar.create_state(user_id))}
+
+
+@app.get("/api/google-calendar/callback")
+def google_calendar_callback(code: str | None = None, state: str | None = None, error: str | None = None):
+    # Google redirects the bare browser here (no Authorization header from
+    # our frontend), so auth.get_current_user_id can't be used — the user_id
+    # travels inside `state` instead (see google_calendar.create_state).
+    if error or not code or not state:
+        return RedirectResponse(f"{FRONTEND_URL}/?google_calendar=error")
+
+    user_id = google_calendar.decode_state(state)
+    try:
+        refresh_token = google_calendar.exchange_code_for_refresh_token(code)
+        user_settings.set_google_calendar_refresh_token(user_id, refresh_token)
+    except (RuntimeError, ValueError):
+        logger.exception("Google Calendar connect failed for user_id=%s", user_id)
+        return RedirectResponse(f"{FRONTEND_URL}/?google_calendar=error")
+
+    return RedirectResponse(f"{FRONTEND_URL}/?google_calendar=connected")
+
+
+@app.post("/api/google-calendar/disconnect")
+def google_calendar_disconnect(user_id: str = Depends(auth.get_current_user_id)) -> dict:
+    refresh_token = user_settings.get_google_calendar_refresh_token(user_id)
+    if refresh_token:
+        google_calendar.revoke(refresh_token)
+        user_settings.set_google_calendar_refresh_token(user_id, None)
     return user_settings.get_settings(user_id)

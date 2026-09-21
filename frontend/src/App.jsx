@@ -10,18 +10,14 @@ import Login from './components/Login';
 import { createConversation, fetchConversations, fetchHistory, sendChat } from './lib/api';
 import { getUsername, isAuthenticated, logout } from './lib/auth';
 import { getReasoningEnabled, setReasoningEnabled } from './lib/settings';
+import { useI18n } from './lib/i18n.jsx';
 import './styles.css';
-
-const CHIPS = [
-  'Хочу купить хлеб за 200 рублей',
-  'Поставь задачу закончить отчёт до пятницы',
-  'Я живу в Москве и учусь на программиста',
-  'Сколько я потратил в этом месяце?',
-];
 
 const uid = () => Math.random().toString(36).slice(2);
 
 export default function App() {
+  const { t } = useI18n();
+  const CHIPS = t('chips');
   const [authed, setAuthed] = useState(isAuthenticated);
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -72,6 +68,16 @@ export default function App() {
   useEffect(() => {
     lift(true);
     window.addEventListener('resize', () => lift(true));
+  }, []);
+
+  // Google's OAuth redirect lands back here with ?google_calendar=... (see
+  // main.py's /api/google-calendar/callback) — reopen Settings so the
+  // result (SettingsPanel reads/clears the same param) is actually visible
+  // instead of landing silently on the chat screen.
+  useEffect(() => {
+    if (new URLSearchParams(window.location.search).has('google_calendar')) {
+      setSettingsOpen(true);
+    }
   }, []);
 
   // Must run before Chat's own effects (which force-scroll on send) so the
@@ -162,7 +168,7 @@ export default function App() {
           return;
         }
         updateMessage(aiId, {
-          content: 'Не получилось получить ответ. Проверьте, что бэкенд запущен.',
+          content: t('replyError'),
           status: 'done',
         });
       }
@@ -247,14 +253,14 @@ export default function App() {
         <div className="mark" id="mark">Impulse</div>
         <div className="bar__right">
           <button className="ghost" type="button" onClick={() => setChatListOpen(true)}>
-            Чаты
+            {t('common.chats')}
           </button>
           <button className="ghost" type="button" onClick={() => setMemoryOpen(true)}>
-            Память
+            {t('common.memory')}
           </button>
           <button className="ghost" id="reset" type="button" onClick={startNewChat}>
             <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>
-            Новый чат
+            {t('common.newChat')}
           </button>
           <Menu
             className="menu--account"
@@ -264,12 +270,12 @@ export default function App() {
                   <circle cx="8" cy="5.5" r="2.7" />
                   <path d="M2.8 13.5a5.2 5.2 0 0 1 10.4 0" />
                 </svg>
-                {getUsername() || 'Аккаунт'}
+                {getUsername() || t('common.account')}
               </button>
             )}
           >
-            <button type="button" className="menu__item" onClick={() => setSettingsOpen(true)}>Настройки</button>
-            <button type="button" className="menu__item" onClick={signOut}>Выйти</button>
+            <button type="button" className="menu__item" onClick={() => setSettingsOpen(true)}>{t('common.settings')}</button>
+            <button type="button" className="menu__item" onClick={signOut}>{t('common.signOut')}</button>
           </Menu>
         </div>
       </header>
@@ -279,10 +285,8 @@ export default function App() {
       <main className="main" id="main" ref={mainRef}>
         {!isChat && (
           <section className="hero" id="hero" ref={heroRef}>
-            <h1 className="hero__title">О чём подумаем?</h1>
-            <p className="hero__sub">
-              Impulse запоминает то, что вы рассказываете, и умеет действовать: ставить задачи, записывать траты и показатели здоровья.
-            </p>
+            <h1 className="hero__title">{t('hero.title')}</h1>
+            <p className="hero__sub">{t('hero.sub')}</p>
             <div className="chips" id="chips">
               {CHIPS.map((c) => (
                 <button key={c} className="chip" type="button" onClick={() => send(c)}>

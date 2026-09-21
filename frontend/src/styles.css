@@ -524,6 +524,13 @@ body.is-chat .dock{ transform:none }
 }
 .icon:hover{ color:var(--flare-deep); background:var(--flare-tint) }
 .icon--active{ color:var(--flare-deep); background:var(--flare-tint) }
+.icon:disabled{ opacity:.6; cursor:default }
+
+.composer__mic{ touch-action:none; user-select:none }
+.composer__mic--recording{ color:#e5484d; background:rgba(229,72,77,.12); animation:mic-pulse 1.4s ease-in-out infinite }
+@keyframes mic-pulse{ 0%,100%{ box-shadow:0 0 0 0 rgba(229,72,77,.35) } 50%{ box-shadow:0 0 0 6px rgba(229,72,77,0) } }
+.composer__mic-spinner{ animation:mic-spin .8s linear infinite }
+@keyframes mic-spin{ to{ transform:rotate(360deg) } }
 
 /* ── Выпадающее меню ─────────────────────────────────────────────── */
 
@@ -603,6 +610,7 @@ body.is-chat .dock{ transform:none }
   font-size:12px;
   color:var(--ink-faint);
 }
+.disclaimer--error{ color:var(--flare-deep) }
 
 /* ── Авторизация ─────────────────────────────────────────────────── */
 
@@ -624,6 +632,16 @@ body.is-chat .dock{ transform:none }
   border-radius:20px;
   background:var(--paper);
   box-shadow:0 24px 60px -30px rgba(36,26,20,.25);
+}
+
+.auth__lang{
+  align-self:flex-end;
+  width:auto;
+}
+.auth__lang .theme-switch__option{
+  flex:none;
+  padding:5px 10px;
+  font-size:12px;
 }
 
 .auth__title{
@@ -859,6 +877,61 @@ body.is-chat .dock{ transform:none }
 }
 .memory-panel__section-head h3{ margin:0 }
 
+/* Small hover popover + "has more info" badge, e.g. on "Reflect" — reusable
+   wherever a control's effect isn't obvious from its label alone. */
+.tooltip{
+  position:relative;
+  display:inline-flex;
+}
+.tooltip__badge{
+  position:absolute;
+  top:-5px;
+  right:-5px;
+  width:14px;
+  height:14px;
+  border-radius:50%;
+  background:var(--flare);
+  color:#fff;
+  font-size:10px;
+  font-weight:700;
+  line-height:14px;
+  text-align:center;
+  pointer-events:none;
+}
+.tooltip__bubble{
+  position:absolute;
+  bottom:calc(100% + 9px);
+  right:0;
+  width:max-content;
+  max-width:220px;
+  padding:8px 11px;
+  border-radius:10px;
+  background:var(--ink);
+  color:var(--paper);
+  font-size:12px;
+  line-height:1.45;
+  text-align:left;
+  box-shadow:0 12px 24px -12px rgba(36,26,20,.35);
+  opacity:0;
+  transform:translateY(4px);
+  pointer-events:none;
+  transition:opacity .15s ease, transform .15s ease;
+  z-index:5;
+}
+.tooltip__bubble::after{
+  content:'';
+  position:absolute;
+  top:100%;
+  right:10px;
+  border:5px solid transparent;
+  border-top-color:var(--ink);
+}
+.tooltip:hover .tooltip__bubble,
+.tooltip:focus-within .tooltip__bubble{
+  opacity:1;
+  transform:translateY(0);
+}
+
 .memory-add{
   display:flex;
   gap:8px;
@@ -1071,20 +1144,25 @@ body.is-chat .dock{ transform:none }
   font-weight:500;
 }
 
-.settings-connect{ display:flex; flex-direction:column; gap:10px }
-.settings-connect__status{
+.settings-connect{ display:flex; flex-direction:column; gap:10px; margin-top:10px }
+
+.service-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:12px;
+}
+.service-row__title{
   display:flex;
   align-items:center;
   gap:8px;
-  padding:10px 12px;
-  border:1px solid var(--line);
-  border-radius:12px;
-  font-size:13.5px;
+  font-size:14.5px;
+  font-weight:500;
 }
-.settings-connect__dot{
+.service-row__dot{
   flex:none;
   width:8px; height:8px;
   border-radius:50%;
   background:#2ecc71;
 }
-.settings-connect__dot--off{ background:var(--ink-faint) }
+.service-row__dot--off{ background:var(--ink-faint) }

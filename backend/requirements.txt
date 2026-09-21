@@ -16,8 +16,11 @@ protobuf
 langchain-core
 langgraph
 langchain-mcp-adapters
+gigachat
+openai
 pyjwt
 passlib[bcrypt]
 bcrypt==4.0.1
 google-auth
 requests
+imageio-ffmpeg

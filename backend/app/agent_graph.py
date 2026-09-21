@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from langchain_core.messages import AIMessage
 from langchain_core.tools import BaseTool
 from langgraph.graph import END, START, MessagesState, StateGraph
@@ -7,7 +9,10 @@ from langgraph.graph.state import CompiledStateGraph
 from langgraph.prebuilt import ToolNode
 
 from . import mcp_tools, tools as tools_module
+from .chat_gigachat import GIGACHAT_MODEL, ChatGigaChat, gigachat_is_configured
 from .chat_model import ChatQwen
+
+logger = logging.getLogger(__name__)
 
 
 def build_tool_list(user_id: str) -> list[BaseTool]:
@@ -21,9 +26,21 @@ def build_tool_list(user_id: str) -> list[BaseTool]:
     return [memory_tool, *action_tools, *mcp_tools.get_cached_mcp_tools()]
 
 
+def _build_llm(enable_thinking: bool):
+    # GigaChat is the intended backend going forward; ChatQwen (local
+    # Qwen3-4B) stays available as a fallback for offline dev whenever
+    # GIGA_CHAT_IDE isn't set, without needing a separate code path — both
+    # expose the same bind_tools()/invoke() surface to the graph below.
+    if gigachat_is_configured():
+        logger.info("llm backend: GigaChat (model=%s)", GIGACHAT_MODEL)
+        return ChatGigaChat(enable_thinking=enable_thinking)
+    logger.warning("llm backend: GIGA_CHAT_IDE not set, falling back to local Qwen3-4B")
+    return ChatQwen(enable_thinking=enable_thinking)
+
+
 def build_graph(user_id: str, enable_thinking: bool = True) -> CompiledStateGraph:
     all_tools = build_tool_list(user_id)
-    llm_with_tools = ChatQwen(enable_thinking=enable_thinking).bind_tools(all_tools)
+    llm_with_tools = _build_llm(enable_thinking).bind_tools(all_tools)
 
     def agent_node(state: MessagesState) -> dict:
         result = llm_with_tools.invoke(state["messages"])

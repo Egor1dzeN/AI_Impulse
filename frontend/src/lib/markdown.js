@@ -14,6 +14,7 @@ import java from 'highlight.js/lib/languages/java';
 import go from 'highlight.js/lib/languages/go';
 import rust from 'highlight.js/lib/languages/rust';
 import php from 'highlight.js/lib/languages/php';
+import { translate } from './i18n.jsx';
 
 hljs.registerLanguage('javascript', javascript);
 hljs.registerLanguage('typescript', typescript);
@@ -82,7 +83,7 @@ function highlight(code, lang) {
   return { html: esc(code), lang: '' };
 }
 
-export function md(src) {
+export function md(src, lang = 'ru') {
   const inline = (s) =>
     esc(s)
       .replace(/`([^`]+)`/g, '<code>$1</code>')
@@ -91,15 +92,15 @@ export function md(src) {
   const blocks = [];
   src = src.replace(/```([a-zA-Z0-9_+-]*)\n?([\s\S]*?)(?:```|$)/g, (m, rawLang, code) => {
     const normalized = rawLang.toLowerCase();
-    const { html, lang } = highlight(code.replace(/\n$/, ''), LANG_ALIASES[normalized] || normalized);
-    const label = LANG_LABELS[lang] || 'Код';
+    const { html, lang: fenceLang } = highlight(code.replace(/\n$/, ''), LANG_ALIASES[normalized] || normalized);
+    const label = LANG_LABELS[fenceLang] || translate(lang, 'chat.code');
     blocks.push(
       `<div class="codeblock">` +
         `<div class="codeblock__bar">` +
           `<span class="codeblock__lang">${esc(label)}</span>` +
-          `<button type="button" class="codeblock__copy">Скопировать</button>` +
+          `<button type="button" class="codeblock__copy">${esc(translate(lang, 'chat.copy'))}</button>` +
         `</div>` +
-        `<pre class="code"><code class="hljs language-${lang || 'plaintext'}">${html}</code></pre>` +
+        `<pre class="code"><code class="hljs language-${fenceLang || 'plaintext'}">${html}</code></pre>` +
       `</div>`
     );
     return `@@code${blocks.length - 1}@@`;

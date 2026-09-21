@@ -1,7 +1,9 @@
 import { useEffect, useState } from 'react';
 import { deleteConversation, fetchConversations } from '../lib/api';
+import { useI18n } from '../lib/i18n.jsx';
 
 export default function ChatList({ open, activeId, onSelect, onDeleted, onClose }) {
+  const { t } = useI18n();
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(false);
 
@@ -32,13 +34,13 @@ export default function ChatList({ open, activeId, onSelect, onDeleted, onClose 
       <div className="chat-list__backdrop" onClick={onClose} />
       <div className="chat-list__body">
         <div className="chat-list__head">
-          <h2>Чаты</h2>
-          <button type="button" className="ghost" onClick={onClose}>Закрыть</button>
+          <h2>{t('common.chats')}</h2>
+          <button type="button" className="ghost" onClick={onClose}>{t('common.close')}</button>
         </div>
 
-        {loading && <p className="chat-list__hint">Загрузка…</p>}
+        {loading && <p className="chat-list__hint">{t('common.loading')}</p>}
         {!loading && items.length === 0 && (
-          <p className="chat-list__hint">Пока нет ни одного чата.</p>
+          <p className="chat-list__hint">{t('chatList.noChats')}</p>
         )}
 
         <ul className="chat-list__items">
@@ -60,7 +62,7 @@ export default function ChatList({ open, activeId, onSelect, onDeleted, onClose 
               <button
                 type="button"
                 className="chat-list__item-remove"
-                aria-label="Удалить чат"
+                aria-label={t('chatList.deleteAriaLabel')}
                 onClick={(e) => remove(c.id, e)}
               >
                 <svg viewBox="0 0 16 16" aria-hidden="true">

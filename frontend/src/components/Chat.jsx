@@ -1,40 +1,35 @@
 import { useEffect, useRef, useState } from 'react';
 import { md } from '../lib/markdown';
+import { getLanguage, translate, useI18n } from '../lib/i18n.jsx';
 import MapboxMap from './MapboxMap';
 
 // Shown instead of the plain dots while waiting for the first token —
-// same idea as Claude's playful status words ("Pondering…", "Noodling…"),
-// just in Russian. Cycles through a random pick every couple of seconds so
-// a longer wait (e.g. the agent working through a few tool calls before
-// any text streams) doesn't just sit on one word the whole time.
-const THINKING_WORDS = [
-  'Думаю', 'Соображаю', 'Кумекаю', 'Смекаю', 'Мозгую', 'Взвешиваю',
-  'Прикидываю', 'Перевариваю', 'Вникаю', 'Копаюсь', 'Ищу мысль',
-  'Собираю мысли', 'Формулирую', 'Подбираю слова', 'Настраиваюсь',
-  'Ворошу идеи', 'Плету ответ', 'Колдую', 'Завариваю мысль',
-  'Прощупываю', 'Ловлю нить', 'Раскручиваю',  'Разгоняюсь',
-];
-
+// same idea as Claude's playful status words ("Pondering…", "Noodling…").
+// Cycles through a random pick every couple of seconds so a longer wait
+// (e.g. the agent working through a few tool calls before any text
+// streams) doesn't just sit on one word the whole time.
 const THINKING_INTERVAL_MS = 5200;
 
-function pickThinkingWord(exclude) {
-  if (THINKING_WORDS.length === 1) return THINKING_WORDS[0];
+function pickThinkingWord(words, exclude) {
+  if (words.length === 1) return words[0];
   let word;
   do {
-    word = THINKING_WORDS[Math.floor(Math.random() * THINKING_WORDS.length)];
+    word = words[Math.floor(Math.random() * words.length)];
   } while (word === exclude);
   return word;
 }
 
 function ThinkingIndicator() {
-  const [word, setWord] = useState(pickThinkingWord);
+  const { t } = useI18n();
+  const words = t('chat.thinkingWords');
+  const [word, setWord] = useState(() => pickThinkingWord(words));
 
   useEffect(() => {
     const id = setInterval(() => {
-      setWord((prev) => pickThinkingWord(prev));
+      setWord((prev) => pickThinkingWord(words, prev));
     }, THINKING_INTERVAL_MS);
     return () => clearInterval(id);
-  }, []);
+  }, [words]);
 
   return (
     <div className="thinking">
@@ -44,23 +39,10 @@ function ThinkingIndicator() {
   );
 }
 
-const ACTION_LABELS = {
-  create_task: 'Задача создана',
-  add_expense: 'Трата записана',
-  log_meal: 'Приём пищи записан',
-  log_weight: 'Вес записан',
-  log_workout: 'Тренировка записана',
-  get_workouts: 'Тренировки',
-  list_tasks: 'Список задач',
-  get_expense_summary: 'Сводка трат',
-  get_health_summary: 'Сводка по здоровью',
-  get_weather: 'Погода',
-  get_exchange_rate: 'Курс валюты',
-};
-
 function ActionBadge({ action }) {
+  const { t } = useI18n();
   if (!action || action.tool === 'show_map' || action.tool === 'build_route' || action.tool === 'get_workout_route') return null;
-  const label = ACTION_LABELS[action.tool] || action.tool;
+  const label = t('chat.actions')[action.tool] || action.tool;
   return (
     <div className="action-badge">
       <svg viewBox="0 0 16 16" aria-hidden="true">
@@ -86,12 +68,13 @@ function ExternalLinkIcon() {
 }
 
 function MapEmbed({ action }) {
+  const { t } = useI18n();
   if (!action || action.tool !== 'show_map') return null;
   const result = action.result;
   if (!result) return null;
 
   if (!result.found) {
-    return <p className="map-embed__miss">Не нашёл «{result.query}» на карте.</p>;
+    return <p className="map-embed__miss">{t('chat.mapMiss', { query: result.query })}</p>;
   }
 
   const { lat, lon, display_name } = result;
@@ -110,23 +93,24 @@ function MapEmbed({ action }) {
 
 const ROUTE_TRAVELMODE = { driving: 'driving', walking: 'walking', cycling: 'bicycling' };
 
-function formatDuration(minutes) {
-  if (minutes < 60) return `${minutes} мин`;
+function formatDuration(minutes, t) {
+  if (minutes < 60) return `${minutes} ${t('chat.minutesShort')}`;
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
-  return m ? `${h} ч ${m} мин` : `${h} ч`;
+  return m ? `${h} ${t('chat.hoursShort')} ${m} ${t('chat.minutesShort')}` : `${h} ${t('chat.hoursShort')}`;
 }
 
 // Built via Mapbox (Directions + an interactive GL JS map), unlike
 // MapEmbed above which stays on plain OpenStreetMap for "just show me
 // this place".
 function RouteEmbed({ action }) {
+  const { t } = useI18n();
   if (!action || action.tool !== 'build_route') return null;
   const result = action.result;
   if (!result) return null;
 
   if (!result.found) {
-    return <p className="map-embed__miss">Не получилось построить маршрут «{result.query}».</p>;
+    return <p className="map-embed__miss">{t('chat.routeMiss', { query: result.query })}</p>;
   }
 
   const { origin, destination, distance_km, duration_min, origin_coords, destination_coords, route_geometry, profile } = result;
@@ -141,10 +125,10 @@ function RouteEmbed({ action }) {
 
   return (
     <div className="map-embed">
-      <MapboxMap markers={markers} route={route_geometry} title={`Маршрут: ${origin} → ${destination}`} />
+      <MapboxMap markers={markers} route={route_geometry} title={t('chat.routeTitle', { from: origin, to: destination })} />
       <a className="map-embed__link" href={directionsHref} target="_blank" rel="noreferrer">
         <ExternalLinkIcon />
-        {origin} → {destination} · {distance_km} км · {formatDuration(duration_min)}
+        {origin} → {destination} · {distance_km} {t('chat.kmShort')} · {formatDuration(duration_min, t)}
       </a>
     </div>
   );
@@ -156,6 +140,7 @@ function RouteEmbed({ action }) {
 // model describe the workout in plain text for that case instead, so there
 // is nothing here for this component to add.
 function WorkoutRouteEmbed({ action }) {
+  const { t } = useI18n();
   if (!action || action.tool !== 'get_workout_route') return null;
   const result = action.result;
   if (!result || !result.has_route || !result.points || result.points.length < 2) return null;
@@ -172,51 +157,55 @@ function WorkoutRouteEmbed({ action }) {
 
   return (
     <div className="map-embed">
-      <MapboxMap markers={markers} route={routeGeometry} title={`Маршрут: ${name}`} />
+      <MapboxMap markers={markers} route={routeGeometry} title={t('chat.workoutRouteTitle', { name })} />
       <a className="map-embed__link" href={activityHref} target="_blank" rel="noreferrer">
         <ExternalLinkIcon />
-        {name} · {dateLabel} · {distance_km} км · {formatDuration(duration_min)}
+        {name} · {dateLabel} · {distance_km} {t('chat.kmShort')} · {formatDuration(duration_min, t)}
       </a>
     </div>
   );
 }
 
 function Copy({ text }) {
+  const { t } = useI18n();
   const btnRef = useRef(null);
   const onClick = () => {
     navigator.clipboard.writeText(text).then(() => {
       const btn = btnRef.current;
       if (!btn) return;
-      btn.textContent = 'Скопировано';
+      btn.textContent = t('chat.copied');
       setTimeout(() => {
-        if (btn) btn.textContent = 'Скопировать';
+        if (btn) btn.textContent = t('chat.copy');
       }, 1600);
     });
   };
   return (
     <button ref={btnRef} type="button" className="copy" onClick={onClick}>
-      Скопировать
+      {t('chat.copy')}
     </button>
   );
 }
 
 // Code blocks are injected as raw HTML (dangerouslySetInnerHTML), so their
 // copy buttons can't take a React onClick — handle clicks via delegation
-// on the feed container instead.
+// on the feed container instead. Not a component, so it reads the current
+// language directly rather than through the i18n context.
 function onFeedClick(e) {
   const btn = e.target.closest('.codeblock__copy');
   if (!btn) return;
   const code = btn.closest('.codeblock')?.querySelector('code');
   if (!code) return;
+  const copiedLabel = translate(getLanguage(), 'chat.copied');
   navigator.clipboard.writeText(code.textContent).then(() => {
     const prev = btn.textContent;
-    btn.textContent = 'Скопировано';
+    btn.textContent = copiedLabel;
     clearTimeout(btn._resetTimer);
     btn._resetTimer = setTimeout(() => { btn.textContent = prev; }, 1600);
   });
 }
 
 export default function Chat({ messages, scrollSignal, smoothScrollSignal }) {
+  const { t, lang } = useI18n();
   const feedRef = useRef(null);
 
   useEffect(() => {
@@ -259,7 +248,7 @@ export default function Chat({ messages, scrollSignal, smoothScrollSignal }) {
       ref={feedRef}
       role="log"
       aria-live="polite"
-      aria-label="Переписка"
+      aria-label={t('chat.ariaLabel')}
       onClick={onFeedClick}
     >
       {messages.map((m) => (
@@ -277,7 +266,7 @@ export default function Chat({ messages, scrollSignal, smoothScrollSignal }) {
                 ) : (
                   <div
                     dangerouslySetInnerHTML={{
-                      __html: md(m.content) + (m.status === 'revealing' ? '<span class="caret"></span>' : ''),
+                      __html: md(m.content, lang) + (m.status === 'revealing' ? '<span class="caret"></span>' : ''),
                     }}
                   />
                 )}

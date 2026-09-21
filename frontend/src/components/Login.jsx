@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react';
 import { GOOGLE_CLIENT_ID, login, loginWithGoogle, register } from '../lib/auth';
+import { useI18n } from '../lib/i18n.jsx';
 
 export default function Login({ onAuthed }) {
+  const { t, lang, changeLanguage } = useI18n();
   const [mode, setMode] = useState('login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
@@ -21,7 +23,7 @@ export default function Login({ onAuthed }) {
         await loginWithGoogle(response.credential);
         onAuthed();
       } catch (err) {
-        setError(err.message || 'Не получилось войти через Google.');
+        setError(err.message || t('login.googleError'));
       }
     }
 
@@ -39,7 +41,7 @@ export default function Login({ onAuthed }) {
         theme: 'outline',
         size: 'large',
         width: 304,
-        locale: 'ru',
+        locale: lang,
       });
     }
 
@@ -47,7 +49,7 @@ export default function Login({ onAuthed }) {
     return () => {
       cancelled = true;
     };
-  }, [showOther]);
+  }, [showOther, lang]);
 
   async function submit(e) {
     e.preventDefault();
@@ -62,7 +64,7 @@ export default function Login({ onAuthed }) {
       }
       onAuthed();
     } catch (err) {
-      setError(err.message || 'Не получилось войти. Попробуйте ещё раз.');
+      setError(err.message || t('login.loginError'));
     } finally {
       setBusy(false);
     }
@@ -71,12 +73,29 @@ export default function Login({ onAuthed }) {
   return (
     <div className="auth">
       <div className="auth__card">
+        <div className="theme-switch auth__lang">
+          <button
+            type="button"
+            className={`theme-switch__option${lang === 'ru' ? ' theme-switch__option--active' : ''}`}
+            onClick={() => changeLanguage('ru')}
+          >
+            Русский
+          </button>
+          <button
+            type="button"
+            className={`theme-switch__option${lang === 'en' ? ' theme-switch__option--active' : ''}`}
+            onClick={() => changeLanguage('en')}
+          >
+            English
+          </button>
+        </div>
+
         <div className="mark">Impulse</div>
-        <h1 className="auth__title">{mode === 'login' ? 'Вход' : 'Регистрация'}</h1>
+        <h1 className="auth__title">{mode === 'login' ? t('login.loginTitle') : t('login.registerTitle')}</h1>
 
         <form onSubmit={submit}>
           <label className="auth__field">
-            <span>Имя пользователя</span>
+            <span>{t('login.username')}</span>
             <input
               type="text"
               autoComplete="username"
@@ -86,7 +105,7 @@ export default function Login({ onAuthed }) {
           </label>
 
           <label className="auth__field">
-            <span>Пароль</span>
+            <span>{t('login.password')}</span>
             <input
               type="password"
               autoComplete={mode === 'login' ? 'current-password' : 'new-password'}
@@ -98,7 +117,7 @@ export default function Login({ onAuthed }) {
           {error && <p className="auth__error">{error}</p>}
 
           <button className="auth__submit" type="submit" disabled={busy}>
-            {mode === 'login' ? 'Войти' : 'Создать аккаунт'}
+            {mode === 'login' ? t('login.loginSubmit') : t('login.registerSubmit')}
           </button>
 
           <button
@@ -109,7 +128,7 @@ export default function Login({ onAuthed }) {
               setError('');
             }}
           >
-            {mode === 'login' ? 'Нет аккаунта? Зарегистрироваться' : 'Уже есть аккаунт? Войти'}
+            {mode === 'login' ? t('login.toRegister') : t('login.toLogin')}
           </button>
         </form>
 
@@ -119,11 +138,11 @@ export default function Login({ onAuthed }) {
             className="ghost auth__other"
             onClick={() => setShowOther(true)}
           >
-            Другие способы входа
+            {t('login.otherMethods')}
           </button>
         ) : (
           <>
-            <div className="auth__divider">или</div>
+            <div className="auth__divider">{t('login.or')}</div>
             <div className="auth__google" ref={googleRef} />
           </>
         )}

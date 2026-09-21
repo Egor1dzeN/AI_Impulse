@@ -19,6 +19,7 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT NOT NULL,
     google_id TEXT,
     intervals_icu_api_key TEXT,
+    google_calendar_refresh_token TEXT,
     created_at TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id) WHERE google_id IS NOT NULL;
@@ -120,6 +121,9 @@ def _migrate(conn: sqlite3.Connection) -> None:
         env_key = os.environ.get("INTERVALS_ICU_API_KEY")
         if env_key:
             conn.execute("UPDATE users SET intervals_icu_api_key = ?", (env_key,))
+
+    if user_columns and "google_calendar_refresh_token" not in user_columns:
+        conn.execute("ALTER TABLE users ADD COLUMN google_calendar_refresh_token TEXT")
 
     # Ensure conversations exists before the backfill below can insert into
     # it — the schema script itself only runs after this function returns.

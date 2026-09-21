@@ -9,7 +9,7 @@ from typing import Any
 import requests
 from langchain_core.tools import BaseTool, tool
 
-from . import db, memory_bridge, user_settings
+from . import db, google_calendar, memory_bridge, user_settings
 
 MEMORY_TOOL_NAME = "search_memory"
 
@@ -27,6 +27,30 @@ def create_task_impl(user_id: str, title: str, due_date: str | None = None, note
             (row_id, user_id, title, due_date, notes, db.now_iso()),
         )
     return {"id": row_id, "title": title, "due_date": due_date, "notes": notes}
+
+
+def create_calendar_event_impl(
+    refresh_token: str, title: str, start_time: str, duration_minutes: int = 30, notes: str | None = None
+) -> dict[str, Any]:
+    """Create a real event (with a popup reminder) on the user's own Google
+    Calendar — unlike create_task_impl above, which only writes to this
+    app's internal tasks table. See google_calendar.py for the OAuth/API
+    details; ToolNode(handle_tool_errors=True) in agent_graph.py turns any
+    exception here (revoked access, a malformed start_time, ...) into a
+    ToolMessage the model can relay to the user instead of crashing the turn."""
+    return google_calendar.create_event(
+        refresh_token=refresh_token,
+        summary=title,
+        start_iso=start_time,
+        duration_minutes=duration_minutes,
+        description=notes,
+    )
+
+
+def list_calendar_events_impl(refresh_token: str, date: str, days: int = 1) -> dict[str, Any]:
+    """Read events from the user's own Google Calendar — the read-side
+    counterpart to create_calendar_event_impl above."""
+    return {"events": google_calendar.list_events(refresh_token=refresh_token, date=date, days=days)}
 
 
 def list_tasks_impl(user_id: str) -> dict[str, Any]:
@@ -530,7 +554,7 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
 
     @tool
     def create_task(title: str, due_date: str | None = None, notes: str | None = None) -> dict:
-        """Создать задачу/напоминание с дедлайном. Действие на запись. due_date — YYYY-MM-DD, опционально."""
+        """Создать задачу во внутреннем списке задач приложения (НЕ синхронизируется с Google Calendar и не присылает уведомлений в конкретное время). Используй для простых дел без точного времени ("добавь задачу купить молоко", "нужно доделать отчёт до пятницы"). Если пользователь просит именно напоминание/событие на конкретные дату И время ("напомни завтра в 9 утра") — используй create_calendar_event, если она доступна в списке функций, а не эту. due_date — YYYY-MM-DD, опционально."""
         return create_task_impl(user_id=user_id, title=title, due_date=due_date, notes=notes)
 
     @tool
@@ -609,12 +633,36 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
 
         @tool(response_format="content_and_artifact")
         def get_workout_route(workout_id: str) -> tuple[dict, dict]:
-            """Получить маршрут (GPS-трек) конкретной тренировки из Intervals.icu — если трек есть, пользователю отдельно покажется интерактивная карта. Вызывай, когда пользователь просит показать маршрут/карту/куда он бежал/ехал на конкретной тренировке. workout_id — бери из результата get_workouts (вызови её сначала, если ещё не знаешь id нужной тренировки); никогда не придумывай и не угадывай id сам. Если found=false — такой тренировки не существует (id устарел или был придуман), сообщи об этом пользователю и предложи сначала посмотреть список через get_workouts. Если found=true, но has_route=false (например тренировка добавлена вручную) — карта не покажется, поэтому в ответе просто опиши тренировку словами (тип, дата, длительность, дистанция), не упоминая карту и не выдумывая маршрут."""
+            """Получить маршрут (GPS-трек) конкретной тренировки из Intervals.icu — если трек есть, пользователю отдельно покажется интерактивная карта, БЕЗ дополнительных вызовов с твоей стороны. Вызывай, когда пользователь просит показать маршрут/карту/куда он бежал/ехал на конкретной тренировке. workout_id — бери из результата get_workouts (вызови её сначала, если ещё не знаешь id нужной тренировки); никогда не придумывай и не угадывай id сам, и никогда не бери его из названия/описания тренировки в сообщении пользователя. Если found=false — такой тренировки не существует (id устарел или был придуман), сообщи об этом пользователю и предложи сначала посмотреть список через get_workouts. Если found=true и has_route=true — карта уже показана, НЕ вызывай show_map или что-либо ещё (show_map с названием тренировки вместо места ничего не найдёт), просто опиши тренировку словами по этим данным. Если found=true, но has_route=false (например тренировка добавлена вручную) — карта не покажется, поэтому в ответе просто опиши тренировку словами (тип, дата, длительность, дистанция), не упоминая карту и не выдумывая маршрут."""
             result = get_workout_route_impl(api_key=intervals_icu_key, workout_id=workout_id)
             summary = {k: v for k, v in result.items() if k != "points"}
             return summary, result
 
         intervals_tools = [log_workout, get_workouts, get_workout_route]
+
+    calendar_tools: list[BaseTool] = []
+    calendar_refresh_token = user_settings.get_google_calendar_refresh_token(user_id)
+    if calendar_refresh_token:
+
+        @tool
+        def create_calendar_event(
+            title: str, start_time: str, duration_minutes: int = 30, notes: str | None = None
+        ) -> dict:
+            """Поставить напоминание/событие в РЕАЛЬНЫЙ Google-календарь пользователя (не путать с create_task — та пишет только во внутренний список задач приложения, без синхронизации с Google). Вызывай ТОЛЬКО когда пользователь явно просит поставить напоминание/событие на конкретное время или дату ("напомни завтра в 9 утра", "поставь встречу в календарь на пятницу в 15:00"). title — короткое название. start_time — ОБЯЗАТЕЛЬНО в формате YYYY-MM-DDTHH:MM:SS по московскому времени (Europe/Moscow), без указания смещения часового пояса — сам разреши относительные даты/время ("завтра", "через час", "в 9 утра") в этот формат, используя сегодняшнюю дату из инструкций. duration_minutes — длительность события в минутах (по умолчанию 30), если пользователь не назвал — не спрашивай, просто оставь по умолчанию. В момент start_time пользователю придёт всплывающее уведомление в Google Calendar."""
+            return create_calendar_event_impl(
+                refresh_token=calendar_refresh_token,
+                title=title,
+                start_time=start_time,
+                duration_minutes=duration_minutes,
+                notes=notes,
+            )
+
+        @tool
+        def get_calendar_events(date: str, days: int = 1) -> dict:
+            """Посмотреть, что запланировано в РЕАЛЬНОМ Google-календаре пользователя. Вызывай, когда пользователь спрашивает про свои планы/расписание/встречи на конкретный день или период ("что у меня завтра", "какие планы на этой неделе", "что запланировано на пятницу"). date — YYYY-MM-DD, начало периода (переведи "сегодня"/"завтра"/день недели в конкретную дату сам, используя сегодняшнюю дату из инструкций). days — сколько дней подряд просмотреть начиная с date (по умолчанию 1 — только этот день; для "на этой неделе" используй 7). Если events пуст — значит на этот период ничего не запланировано, так и скажи."""
+            return list_calendar_events_impl(refresh_token=calendar_refresh_token, date=date, days=days)
+
+        calendar_tools = [create_calendar_event, get_calendar_events]
 
     @tool
     def show_map(place: str) -> dict:
@@ -659,6 +707,7 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
         log_weight,
         get_health_summary,
         *intervals_tools,
+        *calendar_tools,
         show_map,
         build_route,
         get_weather,

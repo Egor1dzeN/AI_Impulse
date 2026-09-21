@@ -24,6 +24,8 @@ class ModelRegistry:
 
     _lock = Lock()
     _qwen = None
+    _embedder = None
+    _reranker = None
     _retrieval_models = None
     _entity_enricher = None
     _grammar_normalizer = None
@@ -49,41 +51,72 @@ class ModelRegistry:
         return cls._qwen
 
     @classmethod
+    def get_embedder(cls):
+        """Return the single shared embedder for this process. Precedence:
+        cloud.ru's hosted Qwen3-Embedding-0.6B (GIGA_CHAT_EMBEDDING) first,
+        then GigaChat's own /embeddings if explicitly opted into
+        (GIGACHAT_USE_EMBEDDINGS — see module comment above, needs separate
+        paid access), else the local Qwen3-Embedding-0.6B.
+
+        Split out from get_retrieval_models() so any caller that only needs
+        the embedder (e.g. memory_bridge.py's lightweight delete/reindex
+        path, which used to bypass this switch entirely by importing
+        Qwen3Embedder directly — a real bug, it silently loaded the local
+        model even with GIGA_CHAT_EMBEDDING/GIGA_CHAT_IDE set) gets the same
+        precedence and the same cached instance, instead of re-deriving it
+        or loading a second copy."""
+        if cls._embedder is None:
+            with cls._lock:
+                if cls._embedder is None:
+                    if cloud_ru_embedding_configured():
+                        from cloud_ru_embedder import CloudRuEmbedder
+
+                        cls._embedder = CloudRuEmbedder()
+                    elif gigachat_is_configured() and GIGACHAT_USE_EMBEDDINGS:
+                        from gigachat_embedder import GigaChatEmbedder
+
+                        cls._embedder = GigaChatEmbedder()
+                    else:
+                        from memory_embedder import Qwen3Embedder
+
+                        print("Creating shared Qwen3-Embedding-0.6B instance...")
+                        cls._embedder = Qwen3Embedder()
+        return cls._embedder
+
+    @classmethod
+    def get_reranker(cls):
+        """Return the single shared reranker: cloud.ru's hosted
+        Qwen3-Reranker-0.6B (same GIGA_CHAT_EMBEDDING key, via its /score
+        endpoint) if configured, else the local Qwen3-Reranker-0.6B —
+        GigaChat itself has no reranking endpoint at all."""
+        if cls._reranker is None:
+            with cls._lock:
+                if cls._reranker is None:
+                    if cloud_ru_rerank_configured():
+                        from cloud_ru_reranker import CloudRuReranker
+
+                        cls._reranker = CloudRuReranker()
+                    else:
+                        from memory_reranker import Qwen3Reranker
+
+                        print("Creating shared Qwen3-Reranker-0.6B instance...")
+                        cls._reranker = Qwen3Reranker()
+        return cls._reranker
+
+    @classmethod
     def get_retrieval_models(cls):
-        """Return the single shared embedding/reranker manager.
-
-        Embedder precedence: cloud.ru's hosted Qwen3-Embedding-0.6B
-        (GIGA_CHAT_EMBEDDING) first, then GigaChat's own /embeddings if
-        explicitly opted into (GIGACHAT_USE_EMBEDDINGS, see comment above —
-        needs separate paid access), else the local Qwen3-Embedding-0.6B.
-
-        Reranker: cloud.ru's hosted Qwen3-Reranker-0.6B (same
-        GIGA_CHAT_EMBEDDING key, via its /score endpoint) if configured,
-        else the local Qwen3-Reranker-0.6B — GigaChat itself has no
-        reranking endpoint at all."""
+        """Return the single shared embedding/reranker manager, built from
+        get_embedder()/get_reranker() above (each independently cached and
+        thread-safe, so this deliberately resolves them before taking its
+        own lock rather than nesting acquisitions of the same non-reentrant
+        Lock)."""
         if cls._retrieval_models is None:
+            embedder = cls.get_embedder()
+            reranker = cls.get_reranker()
             with cls._lock:
                 if cls._retrieval_models is None:
                     from retrieval_model_manager import RetrievalModelManager
 
-                    embedder = None
-                    if cloud_ru_embedding_configured():
-                        from cloud_ru_embedder import CloudRuEmbedder
-
-                        embedder = CloudRuEmbedder()
-                    elif gigachat_is_configured() and GIGACHAT_USE_EMBEDDINGS:
-                        from gigachat_embedder import GigaChatEmbedder
-
-                        embedder = GigaChatEmbedder()
-
-                    reranker = None
-                    if cloud_ru_rerank_configured():
-                        from cloud_ru_reranker import CloudRuReranker
-
-                        reranker = CloudRuReranker()
-
-                    if embedder is None and reranker is None:
-                        print("Creating shared retrieval model manager...")
                     cls._retrieval_models = RetrievalModelManager(embedder=embedder, reranker=reranker)
         return cls._retrieval_models
 
@@ -121,6 +154,8 @@ class ModelRegistry:
     def clear_runtime_cache(cls) -> None:
         """Drop registry references. Use only for an explicit full test reset."""
         cls._qwen = None
+        cls._embedder = None
+        cls._reranker = None
         cls._retrieval_models = None
         cls._entity_enricher = None
         cls._grammar_normalizer = None
@@ -128,6 +163,14 @@ class ModelRegistry:
 
 def get_qwen():
     return ModelRegistry.get_qwen()
+
+
+def get_embedder():
+    return ModelRegistry.get_embedder()
+
+
+def get_reranker():
+    return ModelRegistry.get_reranker()
 
 
 def get_retrieval_models():

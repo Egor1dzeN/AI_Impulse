@@ -30,13 +30,15 @@ class MemorySystem:
     """Complete persistent memory subsystem for Agent Core."""
 
     def __init__(
-        self,
-        enricher: MemoryEnricher,
-        consolidator: MemoryConsolidator,
-        db_path: str | Path = "memory.db",
-        index_dir: str | Path = "memory_index",
-        retrieval_models: RetrievalModelManager | None = None,
-        qwen: Any = None,
+            self,
+            enricher: MemoryEnricher,
+            consolidator: MemoryConsolidator,
+            db_path: str | Path = "memory.db",
+            index_dir: str | Path = "memory_index",
+            retrieval_models: RetrievalModelManager | None = None,
+            qwen: Any = None,
+            dream_every_n_memories: int = 20,
+            dream_max_memories: int = 50,
     ) -> None:
         # Only force_dream() needs raw generation access — everything else
         # goes through the enricher/retrieval_models it already has.
@@ -96,7 +98,14 @@ class MemorySystem:
         self.dreaming_engine = DreamingEngine(
             store=self.store,
             qwen=qwen,
-            every_n_memories=0,
+            every_n_memories=dream_every_n_memories,
+            max_memories_per_run=dream_max_memories,
+        )
+
+        print(
+            f"[DREAMING CONFIG] "
+            f"every_n_memories={self.dreaming_engine.every_n_memories}, "
+            f"max_memories_per_run={self.dreaming_engine.max_memories_per_run}"
         )
 
     # =========================================================
@@ -104,11 +113,15 @@ class MemorySystem:
     # =========================================================
 
     def update(self, text: str, user_id: str):
-        """Process a message, skipping obvious non-memory inputs early."""
+        """Process a message and trigger Dreaming when threshold is reached."""
         route = self.cheap_memory_router.route(text)
 
         if route.value == "skip":
-            logger.info("memory update: user_id=%s text=%r -> SKIPPED by cheap_memory_router", user_id, text)
+            logger.info(
+                "memory update: user_id=%s text=%r -> SKIPPED by cheap_memory_router",
+                user_id,
+                text,
+            )
             return self.pipeline.empty_result()
 
         result = self.pipeline.process(
@@ -118,19 +131,80 @@ class MemorySystem:
 
         logger.info(
             "memory update: user_id=%s text=%r -> %d candidate(s)",
-            user_id, text, len(result.decisions),
+            user_id,
+            text,
+            len(result.decisions),
         )
-        for decision, memory in zip(result.decisions, result.memories):
-            content = memory.content if memory is not None else decision.candidate.candidate.content
+
+        for decision, memory in zip(
+                result.decisions,
+                result.memories,
+        ):
+            content = (
+                memory.content
+                if memory is not None
+                else decision.candidate.candidate.content
+            )
+
             logger.info(
                 "  memory update decision: action=%s content=%r score=%.2f reason=%r",
-                decision.action.value, content, decision.score, decision.reason,
+                decision.action.value,
+                content,
+                decision.score,
+                decision.reason,
             )
 
         self.index_manager.sync_after_pipeline(
             changed_memories=result.memories,
             decisions=result.decisions,
         )
+
+        # ---------------------------------------------------------
+        # AUTOMATIC DREAMING
+        # ---------------------------------------------------------
+
+        changed_count = sum(
+            1
+            for decision in result.decisions
+            if decision.action.value in {
+                "create",
+                "update",
+                "supersede",
+            }
+        )
+
+        if changed_count > 0:
+            pending_before = self.dreaming_engine.pending_count(
+                user_id
+            )
+
+            print(
+                f"[DREAMING DEBUG] "
+                f"changed={changed_count} "
+                f"pending_before={pending_before} "
+                f"threshold={self.dreaming_engine.every_n_memories}"
+            )
+
+            dream_result = (
+                self.dreaming_engine.notify_memory_changes(
+                    user_id=user_id,
+                    count=changed_count,
+                )
+            )
+
+            print(
+                f"[DREAMING DEBUG] "
+                f"pending_after="
+                f"{self.dreaming_engine.pending_count(user_id)} "
+                f"triggered={dream_result is not None}"
+            )
+
+            if (
+                    dream_result is not None
+                    and dream_result.applied
+            ):
+                self.index_manager.rebuild()
+
         return result
 
     # =========================================================

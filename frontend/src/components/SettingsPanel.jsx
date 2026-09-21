@@ -1,14 +1,19 @@
 import { useEffect, useState } from 'react';
 import { fetchSettings, updateSettings } from '../lib/api';
 import { applyTheme, getTheme, setTheme as persistTheme } from '../lib/settings';
-
-const THEME_OPTIONS = [
-  { value: 'system', label: 'Системная' },
-  { value: 'light', label: 'Светлая' },
-  { value: 'dark', label: 'Тёмная' },
-];
+import { useI18n } from '../lib/i18n.jsx';
 
 export default function SettingsPanel({ open, onClose }) {
+  const { t, lang, changeLanguage } = useI18n();
+  const THEME_OPTIONS = [
+    { value: 'system', label: t('settings.themeSystem') },
+    { value: 'light', label: t('settings.themeLight') },
+    { value: 'dark', label: t('settings.themeDark') },
+  ];
+  const LANG_OPTIONS = [
+    { value: 'ru', label: t('settings.langRu') },
+    { value: 'en', label: t('settings.langEn') },
+  ];
   const [theme, setThemeState] = useState(getTheme);
   const [connected, setConnected] = useState(null); // null = ещё не загружено
   const [loading, setLoading] = useState(false);
@@ -49,7 +54,7 @@ export default function SettingsPanel({ open, onClose }) {
       setConnected(s.intervals_icu_connected);
       setKeyInput('');
     } catch {
-      setError('Не получилось подключить — проверьте ключ.');
+      setError(t('settings.connectError'));
     } finally {
       setSaving(false);
     }
@@ -73,12 +78,28 @@ export default function SettingsPanel({ open, onClose }) {
       <div className="settings-panel__backdrop" onClick={onClose} />
       <div className="settings-panel__body">
         <div className="settings-panel__head">
-          <h2>Настройки</h2>
-          <button type="button" className="ghost" onClick={onClose}>Закрыть</button>
+          <h2>{t('common.settings')}</h2>
+          <button type="button" className="ghost" onClick={onClose}>{t('common.close')}</button>
         </div>
 
         <section>
-          <h3>Тема</h3>
+          <h3>{t('settings.languageSectionTitle')}</h3>
+          <div className="theme-switch">
+            {LANG_OPTIONS.map((opt) => (
+              <button
+                key={opt.value}
+                type="button"
+                className={`theme-switch__option${lang === opt.value ? ' theme-switch__option--active' : ''}`}
+                onClick={() => changeLanguage(opt.value)}
+              >
+                {opt.label}
+              </button>
+            ))}
+          </div>
+        </section>
+
+        <section>
+          <h3>{t('settings.themeSectionTitle')}</h3>
           <div className="theme-switch">
             {THEME_OPTIONS.map((opt) => (
               <button
@@ -95,19 +116,17 @@ export default function SettingsPanel({ open, onClose }) {
 
         <section>
           <h3>Intervals.icu</h3>
-          {loading && <p className="settings-panel__hint">Загрузка…</p>}
+          {loading && <p className="settings-panel__hint">{t('common.loading')}</p>}
 
           {!loading && connected && (
             <div className="settings-connect">
               <div className="settings-connect__status">
                 <span className="settings-connect__dot" />
-                Подключено
+                {t('settings.intervalsConnected')}
               </div>
-              <p className="settings-panel__hint">
-                Ассистент может записывать тренировки и показывать маршруты из вашего аккаунта Intervals.icu.
-              </p>
+              <p className="settings-panel__hint">{t('settings.intervalsConnectedHint')}</p>
               <button type="button" className="ghost" onClick={disconnectIntervals} disabled={disconnecting}>
-                {disconnecting ? 'Отключаю…' : 'Отключить'}
+                {disconnecting ? t('settings.disconnecting') : t('settings.disconnect')}
               </button>
             </div>
           )}
@@ -116,23 +135,21 @@ export default function SettingsPanel({ open, onClose }) {
             <div className="settings-connect">
               <div className="settings-connect__status settings-connect__status--off">
                 <span className="settings-connect__dot settings-connect__dot--off" />
-                Не подключено
+                {t('settings.intervalsNotConnected')}
               </div>
               <button type="button" className="ghost" onClick={() => setShowConnectForm(true)}>
-                Подключить
+                {t('settings.connect')}
               </button>
             </div>
           )}
 
           {!loading && !connected && showConnectForm && (
             <form className="settings-connect" onSubmit={connectIntervals}>
-              <p className="settings-panel__hint">
-                Вставьте личный API-ключ из intervals.icu → Settings → Developer Settings, чтобы ассистент мог записывать тренировки и показывать их маршруты на карте.
-              </p>
+              <p className="settings-panel__hint">{t('settings.intervalsConnectHint')}</p>
               <div className="memory-add">
                 <input
                   type="password"
-                  placeholder="API-ключ"
+                  placeholder={t('settings.apiKeyPlaceholder')}
                   value={keyInput}
                   onChange={(e) => setKeyInput(e.target.value)}
                   disabled={saving}
@@ -140,7 +157,7 @@ export default function SettingsPanel({ open, onClose }) {
                   autoFocus
                 />
                 <button type="submit" className="ghost" disabled={saving || !keyInput.trim()}>
-                  {saving ? 'Подключаю…' : 'Подключить'}
+                  {saving ? t('settings.connecting') : t('settings.connect')}
                 </button>
               </div>
               {error && <p className="settings-panel__hint settings-panel__hint--error">{error}</p>}

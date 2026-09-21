@@ -626,6 +626,16 @@ body.is-chat .dock{ transform:none }
   box-shadow:0 24px 60px -30px rgba(36,26,20,.25);
 }
 
+.auth__lang{
+  align-self:flex-end;
+  width:auto;
+}
+.auth__lang .theme-switch__option{
+  flex:none;
+  padding:5px 10px;
+  font-size:12px;
+}
+
 .auth__title{
   margin:0 0 4px;
   font-family:var(--font-display);
@@ -858,6 +868,61 @@ body.is-chat .dock{ transform:none }
   margin-bottom:10px;
 }
 .memory-panel__section-head h3{ margin:0 }
+
+/* Small hover popover + "has more info" badge, e.g. on "Reflect" — reusable
+   wherever a control's effect isn't obvious from its label alone. */
+.tooltip{
+  position:relative;
+  display:inline-flex;
+}
+.tooltip__badge{
+  position:absolute;
+  top:-5px;
+  right:-5px;
+  width:14px;
+  height:14px;
+  border-radius:50%;
+  background:var(--flare);
+  color:#fff;
+  font-size:10px;
+  font-weight:700;
+  line-height:14px;
+  text-align:center;
+  pointer-events:none;
+}
+.tooltip__bubble{
+  position:absolute;
+  bottom:calc(100% + 9px);
+  right:0;
+  width:max-content;
+  max-width:220px;
+  padding:8px 11px;
+  border-radius:10px;
+  background:var(--ink);
+  color:var(--paper);
+  font-size:12px;
+  line-height:1.45;
+  text-align:left;
+  box-shadow:0 12px 24px -12px rgba(36,26,20,.35);
+  opacity:0;
+  transform:translateY(4px);
+  pointer-events:none;
+  transition:opacity .15s ease, transform .15s ease;
+  z-index:5;
+}
+.tooltip__bubble::after{
+  content:'';
+  position:absolute;
+  top:100%;
+  right:10px;
+  border:5px solid transparent;
+  border-top-color:var(--ink);
+}
+.tooltip:hover .tooltip__bubble,
+.tooltip:focus-within .tooltip__bubble{
+  opacity:1;
+  transform:translateY(0);
+}
 
 .memory-add{
   display:flex;

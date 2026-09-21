@@ -1,18 +1,10 @@
 import { useEffect, useState } from 'react';
 import { addMemory, deleteMemory, dreamMemories, fetchMemories, fetchSandbox, searchMemories } from '../lib/api';
-
-const TYPE_LABELS = {
-  fact: 'Факт',
-  preference: 'Предпочтение',
-  episode: 'Событие',
-  entity: 'Сущность',
-  relationship: 'Отношение',
-  goal: 'Цель',
-  state: 'Состояние',
-  procedure: 'Процедура',
-};
+import { useI18n } from '../lib/i18n.jsx';
 
 export default function MemoryPanel({ open, onClose }) {
+  const { t } = useI18n();
+  const TYPE_LABELS = t('memoryPanel.types');
   const [memories, setMemories] = useState([]);
   const [sandbox, setSandbox] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -55,7 +47,7 @@ export default function MemoryPanel({ open, onClose }) {
       setNewFact('');
       await loadMemories();
     } catch {
-      setAddError('Не получилось добавить. Попробуйте ещё раз.');
+      setAddError(t('memoryPanel.addError'));
     } finally {
       setAdding(false);
     }
@@ -71,7 +63,7 @@ export default function MemoryPanel({ open, onClose }) {
       const hits = await searchMemories(q);
       setSearchResults(hits);
     } catch {
-      setSearchError('Не получилось найти. Попробуйте ещё раз.');
+      setSearchError(t('memoryPanel.searchError'));
     } finally {
       setSearching(false);
     }
@@ -92,7 +84,7 @@ export default function MemoryPanel({ open, onClose }) {
       setDreamSummary(result.summary);
       if (result.merged.length) await loadMemories();
     } catch {
-      setDreamSummary('Не получилось обработать память. Попробуйте ещё раз.');
+      setDreamSummary(t('memoryPanel.dreamError'));
     } finally {
       setDreaming(false);
     }
@@ -116,37 +108,40 @@ export default function MemoryPanel({ open, onClose }) {
       <div className="memory-panel__backdrop" onClick={onClose} />
       <div className="memory-panel__body">
         <div className="memory-panel__head">
-          <h2>Память</h2>
-          <button type="button" className="ghost" onClick={onClose}>Закрыть</button>
+          <h2>{t('common.memory')}</h2>
+          <button type="button" className="ghost" onClick={onClose}>{t('common.close')}</button>
         </div>
 
-        {loading && <p className="memory-panel__hint">Загрузка…</p>}
+        {loading && <p className="memory-panel__hint">{t('common.loading')}</p>}
 
         <section>
           <div className="memory-panel__section-head">
-            <h3>Что ассистент запомнил о вас</h3>
-            <button
-              type="button"
-              className="ghost"
-              onClick={runDream}
-              disabled={dreaming}
-              title="Найти и объединить дубликаты/противоречия среди всех фактов"
-            >
-              {dreaming ? 'Обрабатываю…' : 'Осмыслить'}
-            </button>
+            <h3>{t('memoryPanel.aboutYou')}</h3>
+            <span className="tooltip">
+              <button
+                type="button"
+                className="ghost"
+                onClick={runDream}
+                disabled={dreaming}
+              >
+                {dreaming ? t('memoryPanel.dreamButtonBusy') : t('memoryPanel.dreamButton')}
+              </button>
+              <span className="tooltip__badge" aria-hidden="true">!</span>
+              <span className="tooltip__bubble" role="tooltip">{t('memoryPanel.dreamTooltip')}</span>
+            </span>
           </div>
           {dreamSummary && <p className="memory-panel__hint">{dreamSummary}</p>}
 
           <form className="memory-add" onSubmit={submitNewFact}>
             <input
               type="text"
-              placeholder="Добавить факт о себе…"
+              placeholder={t('memoryPanel.addFactPlaceholder')}
               value={newFact}
               onChange={(e) => setNewFact(e.target.value)}
               disabled={adding}
             />
             <button type="submit" className="ghost" disabled={adding || !newFact.trim()}>
-              {adding ? 'Добавляю…' : 'Добавить'}
+              {adding ? t('memoryPanel.addButtonBusy') : t('memoryPanel.addButton')}
             </button>
           </form>
           {addError && <p className="memory-panel__hint memory-panel__hint--error">{addError}</p>}
@@ -154,26 +149,26 @@ export default function MemoryPanel({ open, onClose }) {
           <form className="memory-add" onSubmit={submitSearch}>
             <input
               type="text"
-              placeholder="Поиск по памяти…"
+              placeholder={t('memoryPanel.searchPlaceholder')}
               value={searchInput}
               onChange={(e) => setSearchInput(e.target.value)}
               disabled={searching}
             />
             {searchResults ? (
-              <button type="button" className="ghost" onClick={clearSearch}>Сбросить</button>
+              <button type="button" className="ghost" onClick={clearSearch}>{t('common.reset')}</button>
             ) : (
               <button type="submit" className="ghost" disabled={searching || !searchInput.trim()}>
-                {searching ? 'Ищу…' : 'Найти'}
+                {searching ? t('memoryPanel.searchButtonBusy') : t('memoryPanel.searchButton')}
               </button>
             )}
           </form>
           {searchError && <p className="memory-panel__hint memory-panel__hint--error">{searchError}</p>}
 
           {searchResults && searchResults.length === 0 && !searching && (
-            <p className="memory-panel__hint">Ничего не найдено по этому запросу.</p>
+            <p className="memory-panel__hint">{t('memoryPanel.noSearchResults')}</p>
           )}
           {!searchResults && memories.length === 0 && !loading && (
-            <p className="memory-panel__hint">Пока ничего — напишите что-нибудь о себе в чате или добавьте вручную.</p>
+            <p className="memory-panel__hint">{t('memoryPanel.noMemories')}</p>
           )}
           <ul className="memory-list">
             {(searchResults ?? memories).map((m) => (
@@ -183,7 +178,7 @@ export default function MemoryPanel({ open, onClose }) {
                 <button
                   type="button"
                   className="memory-list__remove"
-                  aria-label="Удалить факт"
+                  aria-label={t('memoryPanel.deleteFactAriaLabel')}
                   disabled={removingId === m.id}
                   onClick={() => removeMemory(m.id)}
                 >
@@ -198,19 +193,22 @@ export default function MemoryPanel({ open, onClose }) {
 
         {sandbox && (
           <section>
-            <h3>Последние действия</h3>
+            <h3>{t('memoryPanel.recentActions')}</h3>
             <ul className="memory-list">
-              {sandbox.tasks.slice(0, 5).map((t) => (
-                <li key={t.id}>Задача: {t.title}{t.due_date ? ` — до ${t.due_date}` : ''}</li>
+              {sandbox.tasks.slice(0, 5).map((task) => (
+                <li key={task.id}>
+                  {t('memoryPanel.taskLine', { title: task.title })}
+                  {task.due_date ? t('memoryPanel.taskDueSuffix', { date: task.due_date }) : ''}
+                </li>
               ))}
               {sandbox.expenses.slice(0, 5).map((e) => (
-                <li key={e.id}>Трата: {e.amount} ₽ ({e.category}), {e.date}</li>
+                <li key={e.id}>{t('memoryPanel.expenseLine', { amount: e.amount, category: e.category, date: e.date })}</li>
               ))}
               {sandbox.meals.slice(0, 5).map((m) => (
-                <li key={m.id}>Приём пищи: {m.name}, {m.kcal} ккал, {m.date}</li>
+                <li key={m.id}>{t('memoryPanel.mealLine', { name: m.name, kcal: m.kcal, date: m.date })}</li>
               ))}
               {sandbox.weights.slice(0, 5).map((w) => (
-                <li key={w.id}>Вес: {w.value_kg} кг, {w.date}</li>
+                <li key={w.id}>{t('memoryPanel.weightLine', { value: w.value_kg, date: w.date })}</li>
               ))}
             </ul>
           </section>

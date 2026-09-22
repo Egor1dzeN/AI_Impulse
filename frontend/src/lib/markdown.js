@@ -64,7 +64,7 @@ const LANG_LABELS = {
 };
 
 const esc = (s) =>
-  s.replace(/[&<>]/g, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : '&gt;'));
+  s.replace(/[&<>"]/g, (c) => (c === '&' ? '&amp;' : c === '<' ? '&lt;' : c === '>' ? '&gt;' : '&quot;'));
 
 // Highlights a fenced code block. `lang` is whatever followed the opening
 // ``` (may be empty, unknown, or an alias like "js"/"py" — hljs resolves
@@ -87,7 +87,13 @@ export function md(src, lang = 'ru') {
   const inline = (s) =>
     esc(s)
       .replace(/`([^`]+)`/g, '<code>$1</code>')
-      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+      // [label](https://url) -> a real link. Restricted to http(s) so a
+      // model can't smuggle a javascript: URL into an anchor href.
+      .replace(
+        /\[([^\]]+)\]\((https?:\/\/[^\s")]+)\)/g,
+        '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
+      );
 
   const blocks = [];
   src = src.replace(/```([a-zA-Z0-9_+-]*)\n?([\s\S]*?)(?:```|$)/g, (m, rawLang, code) => {

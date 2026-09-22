@@ -147,6 +147,57 @@ body.is-chat .mark{ padding-left:52px }
 }
 .ghost--active:hover{ border-color:var(--flare); background:var(--flare-tint) }
 
+.ghost--danger{ color:var(--flare-deep); border-color:rgba(229,72,77,.35) }
+.ghost--danger:hover{ border-color:#e5484d; color:#e5484d; background:rgba(229,72,77,.08) }
+
+.import-panel__checkbox{
+  display:flex;
+  align-items:flex-start;
+  gap:8px;
+  margin:10px 0 0;
+  font-size:13.5px;
+  color:var(--ink-soft);
+  cursor:pointer;
+}
+.import-panel__checkbox input{ margin-top:3px; flex:none }
+
+.confirm-modal{
+  position:fixed;
+  inset:0;
+  z-index:60;
+  display:flex;
+  align-items:center;
+  justify-content:center;
+}
+.confirm-modal__backdrop{
+  position:absolute;
+  inset:0;
+  background:rgba(20,14,10,.45);
+}
+.confirm-modal__box{
+  position:relative;
+  width:min(360px, calc(100vw - 32px));
+  padding:20px;
+  border:1px solid var(--line-strong);
+  border-radius:16px;
+  background:var(--paper);
+  box-shadow:0 20px 50px -20px rgba(0,0,0,.4);
+  display:flex;
+  flex-direction:column;
+  gap:10px;
+}
+.confirm-modal__box h3{
+  margin:0;
+  font-size:15px;
+  font-weight:600;
+}
+.confirm-modal__box p{
+  margin:0;
+  font-size:13.5px;
+  color:var(--ink-soft);
+  line-height:1.5;
+}
+
 /* ── Ядро ────────────────────────────────────────────────────────── */
 
 .stage{
@@ -264,6 +315,44 @@ body.is-chat .hero{
   color:var(--flare-deep);
   transform:translateY(-1px);
 }
+
+.proactive{
+  margin:26px auto 0;
+  max-width:560px;
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+  text-align:left;
+}
+.proactive__title{
+  margin:0 0 2px;
+  font-size:13px;
+  letter-spacing:.04em;
+  text-transform:uppercase;
+  color:var(--ink-soft);
+}
+.proactive__item{
+  display:flex;
+  flex-direction:column;
+  gap:3px;
+  padding:10px 14px;
+  border:1px solid var(--line-strong);
+  border-left-width:3px;
+  border-radius:12px;
+  background:var(--paper);
+  color:var(--ink);
+  text-align:left;
+  transition:border-color .2s, background .2s, transform .2s var(--ease);
+}
+.proactive__item:hover{
+  border-color:var(--flare-line);
+  background:var(--flare-tint);
+  transform:translateY(-1px);
+}
+.proactive__item--high{ border-left-color:var(--flare) }
+.proactive__head{ font-size:14px; font-weight:500 }
+.proactive__details{ font-size:13px; color:var(--ink-soft) }
+.proactive__action{ font-size:12.5px; color:var(--flare-deep) }
 
 /* ── Лента ───────────────────────────────────────────────────────── */
 
@@ -506,6 +595,43 @@ body.is-chat .dock{ transform:none }
   overflow-y:auto;
 }
 .composer__input::placeholder{ color:var(--ink-faint) }
+
+.composer__attachments{
+  display:flex;
+  flex-wrap:wrap;
+  gap:6px;
+  list-style:none;
+  margin:0 0 8px;
+  padding:0;
+}
+.composer__attachment{
+  display:flex;
+  align-items:center;
+  gap:6px;
+  max-width:220px;
+  padding:4px 6px 4px 10px;
+  border-radius:14px;
+  background:var(--flare-tint);
+  color:var(--ink);
+  font-size:.85em;
+}
+.composer__attachment-name{
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.composer__attachment-remove{
+  flex:none;
+  width:18px; height:18px;
+  border:0;
+  border-radius:50%;
+  padding:0;
+  line-height:1;
+  color:var(--ink-faint);
+  background:none;
+  cursor:pointer;
+}
+.composer__attachment-remove:hover{ color:var(--flare-deep); background:rgba(255,90,0,.12) }
 
 /* space-between держит кнопку отправки справа, когда подсказка скрыта */
 .composer__row{ display:flex; align-items:center; justify-content:space-between; gap:12px }
@@ -876,6 +1002,43 @@ body.is-chat .dock{ transform:none }
   font-weight:500;
   color:#2ecc71;
 }
+.email-draft__actions{ display:flex; gap:8px }
+
+.calendar-delete-list{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+  list-style:none;
+  margin:0;
+  padding:0;
+}
+.calendar-delete-row{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:10px;
+  padding:8px 10px;
+  border-radius:10px;
+  background:var(--paper);
+  border:1px solid var(--line);
+}
+.calendar-delete-row__info{
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+  min-width:0;
+}
+.calendar-delete-row__summary{
+  font-size:13.5px;
+  color:var(--ink);
+  overflow:hidden;
+  text-overflow:ellipsis;
+  white-space:nowrap;
+}
+.calendar-delete-row__start{ font-size:12px; color:var(--ink-faint) }
+.calendar-delete-row__actions{ flex:none; display:flex; align-items:center; gap:4px }
+.calendar-delete-row__status{ flex:none; font-size:12.5px; font-weight:500; color:#2ecc71 }
+.calendar-delete-row__status--error{ color:var(--flare-deep) }
 
 /* ── Панель памяти ───────────────────────────────────────────────── */
 
@@ -1057,6 +1220,107 @@ body.is-chat .dock{ transform:none }
 .memory-list__remove:hover{ color:var(--flare-deep); background:var(--flare-tint) }
 .memory-list__remove:disabled{ opacity:.5 }
 
+/* ── Панель финансов ─────────────────────────────────────────────── */
+
+.finance-panel{
+  position:fixed;
+  inset:0;
+  z-index:40;
+}
+.finance-panel__backdrop{
+  position:absolute;
+  inset:0;
+  background:rgba(36,26,20,.28);
+  animation:fade .2s ease both;
+}
+.finance-panel__body{
+  position:absolute;
+  top:0; right:0; bottom:0;
+  width:min(420px, 100vw);
+  background:var(--paper);
+  border-left:1px solid var(--line-strong);
+  box-shadow:-24px 0 48px -24px rgba(36,26,20,.25);
+  padding:22px 22px 32px;
+  overflow-y:auto;
+  animation:slide-in .28s var(--ease) both;
+}
+.finance-panel__head{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  margin-bottom:18px;
+}
+.finance-panel__head h2{
+  font-family:var(--font-display);
+  font-size:19px;
+  font-weight:500;
+  margin:0;
+}
+.finance-panel__hint{ color:var(--ink-faint); font-size:13.5px }
+.finance-panel__hint--error{ color:var(--flare-deep) }
+
+.finance-panel section{ margin-bottom:26px }
+.finance-panel h3{
+  font-size:13px;
+  font-weight:600;
+  text-transform:uppercase;
+  letter-spacing:.04em;
+  color:var(--ink-soft);
+  margin:0 0 10px;
+}
+
+.finance-summary{
+  padding:14px 16px;
+  border:1px solid var(--line-strong);
+  border-radius:14px;
+  margin-bottom:26px;
+}
+.finance-summary__row{
+  display:flex;
+  align-items:baseline;
+  justify-content:space-between;
+  gap:10px;
+}
+.finance-summary__row--muted{
+  margin-top:8px;
+  font-size:12.5px;
+  color:var(--ink-faint);
+}
+.finance-summary__label{ font-size:13px; color:var(--ink-soft) }
+.finance-summary__value{ font-family:var(--font-display); font-size:22px; font-weight:500 }
+.finance-summary__value--positive{ color:#2ecc71 }
+.finance-summary__value--negative{ color:var(--flare-deep) }
+
+.finance-list{ list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:8px }
+.finance-list__item{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:4px 10px;
+  padding:10px 12px;
+  border:1px solid var(--line);
+  border-radius:12px;
+  font-size:13.5px;
+  line-height:1.5;
+}
+.finance-list__main{
+  display:flex;
+  flex:1;
+  min-width:0;
+  align-items:baseline;
+  gap:8px;
+}
+.finance-list__category{ font-weight:500 }
+.finance-list__date{ color:var(--ink-faint); font-size:12px; flex:none }
+.finance-list__note{
+  flex-basis:100%;
+  color:var(--ink-faint);
+  font-size:12.5px;
+}
+.finance-list__amount{ flex:none; font-weight:600 }
+.finance-list__amount--income{ color:#2ecc71 }
+.finance-list__amount--expense{ color:var(--flare-deep) }
+
 /* ── Список чатов ────────────────────────────────────────────────── */
 
 .chat-list{
@@ -1234,3 +1498,5 @@ body.is-chat .dock{ transform:none }
   background:#2ecc71;
 }
 .service-row__dot--off{ background:var(--ink-faint) }
+
+.memory-list__meta{ display:block; margin-top:3px; font-size:12px; color:var(--ink-soft) }

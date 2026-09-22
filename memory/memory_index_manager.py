@@ -37,10 +37,36 @@ class MemoryIndexManager:
             self.rebuild()
 
     def rebuild(self, save: bool = True) -> None:
+        """Bring the index in line with SQLite, embedding only what changed:
+        vectors of deleted/archived/edited memories are cut out, and only
+        new or edited memories are sent to the embedder. (A full re-embed of
+        every user's memories on each delete/supersede was the old behaviour.)"""
         memories = self.repository.get_active()
-        self.index.build(memories, self.embedder)
+        by_id = {memory.id: memory for memory in memories}
+
+        stale = [
+            memory_id for memory_id in self.index.memory_ids
+            if memory_id not in by_id
+            or self.index.memory_signatures.get(memory_id) != self.index.memory_signature(by_id[memory_id])
+        ]
+        self.index.remove(stale)
+
+        indexed = set(self.index.memory_ids)
+        missing = [memory for memory in memories if memory.id not in indexed]
+        if missing:
+            self.index.add(
+                [memory.id for memory in missing],
+                self.embedder.encode_documents([memory.content for memory in missing]),
+                signatures={memory.id: self.index.memory_signature(memory) for memory in missing},
+            )
 
         if save:
+            self.index.save()
+
+    def remove(self, memory_ids) -> None:
+        """Deletion path: cut the vectors out instead of a full rebuild,
+        which would re-embed every remaining memory of every user."""
+        if self.index.remove(memory_ids):
             self.index.save()
 
     def sync_after_pipeline(

@@ -11,6 +11,8 @@ from langgraph.prebuilt import ToolNode
 from . import mcp_tools, tools as tools_module
 from .chat_gigachat import GIGACHAT_MODEL, ChatGigaChat, gigachat_is_configured
 from .chat_model import ChatQwen
+from .data_tools import build_data_tools
+from .masking import mask_obj, mask_sensitive
 
 logger = logging.getLogger(__name__)
 
@@ -21,9 +23,10 @@ def build_tool_list(user_id: str) -> list[BaseTool]:
     configured (see mcp_tools.py — empty until mcp_servers.json exists).
     LangGraph's ToolNode and the chat model treat every entry identically,
     so plugging in more MCP tools later needs no changes here."""
-    memory_tool = tools_module.build_memory_tool(user_id)
+    memory_tools = tools_module.build_memory_tools(user_id)
+    data_tools = build_data_tools(user_id)
     action_tools = tools_module.build_action_tools(user_id)
-    return [memory_tool, *action_tools, *mcp_tools.get_cached_mcp_tools()]
+    return [*memory_tools, *data_tools, *action_tools, *mcp_tools.get_cached_mcp_tools()]
 
 
 def _build_llm(enable_thinking: bool):
@@ -62,7 +65,20 @@ def build_graph(user_id: str, enable_thinking: bool = True) -> CompiledStateGrap
     # turns any such exception into a ToolMessage the model can see and
     # react to (retry, apologize, ask again) so one flaky/misused tool
     # call can't take down the entire turn.
-    graph.add_node("tools", ToolNode(all_tools, handle_tool_errors=True))
+    tool_node = ToolNode(all_tools, handle_tool_errors=True)
+
+    # Every tool result passes through masking before it can reach the
+    # model's prompt or the UI — no tool has to remember to do it itself.
+    def masked_tools_node(state: MessagesState, config) -> dict:
+        result = tool_node.invoke(state, config)
+        for msg in result.get("messages", []):
+            if isinstance(msg.content, str):
+                msg.content = mask_sensitive(msg.content)
+            if getattr(msg, "artifact", None) is not None:
+                msg.artifact = mask_obj(msg.artifact)
+        return result
+
+    graph.add_node("tools", masked_tools_node)
     graph.add_edge(START, "agent")
     graph.add_conditional_edges("agent", route, {"tools": "tools", END: END})
     graph.add_edge("tools", "agent")

@@ -1,6 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
-import { transcribeAudio } from '../lib/api';
+import { extractDocument, transcribeAudio } from '../lib/api';
 import { useI18n } from '../lib/i18n.jsx';
+
+const uid = () => Math.random().toString(36).slice(2);
 
 export default function Composer({ value, onChange, onSend, onStop, busy, reasoning, onToggleReasoning }) {
   const { t } = useI18n();
@@ -10,6 +12,19 @@ export default function Composer({ value, onChange, onSend, onStop, busy, reason
   const heldRef = useRef(false); // true while the mic button is physically pressed
   const [voiceState, setVoiceState] = useState('idle'); // idle | recording | transcribing
   const [voiceError, setVoiceError] = useState('');
+  const [attachError, setAttachError] = useState('');
+  const [attachments, setAttachments] = useState([]); // [{id, name, content}]
+
+  const ATTACHABLE_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.markdown', '.json', '.jsonl', '.csv', '.log', '.yaml', '.yml'];
+  const MAX_ATTACH_BYTES = 15 * 1024 * 1024;
+
+  // Attachments are extracted server-side (hidden text stripped, secrets
+  // masked, injections flagged) into a block marked as data, appended to
+  // the outgoing message only at send time.
+  const buildOutgoingText = (text) => {
+    const blocks = attachments.map((a) => `\n\n${a.content}`);
+    return (text || '').trimEnd() + blocks.join('');
+  };
 
   const grow = () => {
     const el = inputRef.current;
@@ -28,23 +43,49 @@ export default function Composer({ value, onChange, onSend, onStop, busy, reason
 
   const submit = (e) => {
     e.preventDefault();
-    onSend(value);
+    onSend(buildOutgoingText(value));
+    setAttachments([]);
   };
 
   const onKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      onSend(value);
+      onSend(buildOutgoingText(value));
+      setAttachments([]);
     }
   };
 
+  const removeAttachment = (id) => {
+    setAttachments((prev) => prev.filter((a) => a.id !== id));
+  };
+
   const attach = () => {
+    setAttachError('');
     const picker = document.createElement('input');
     picker.type = 'file';
+    picker.accept = ATTACHABLE_EXTENSIONS.join(',');
     picker.addEventListener('change', () => {
-      if (!picker.files.length) return;
-      onChange((value ? value.trim() + ' ' : '') + picker.files[0].name);
-      inputRef.current?.focus();
+      const file = picker.files[0];
+      if (!file) return;
+
+      const extension = '.' + (file.name.split('.').pop() || '').toLowerCase();
+      if (!ATTACHABLE_EXTENSIONS.includes(extension)) {
+        setAttachError(t('composer.attachUnsupported'));
+        return;
+      }
+      if (file.size > MAX_ATTACH_BYTES) {
+        setAttachError(t('composer.attachTooLarge'));
+        return;
+      }
+
+      extractDocument(file)
+        .then((doc) => {
+          const flagged = (doc.security || []).length > 0;
+          setAttachments((prev) => [...prev, { id: uid(), name: file.name, content: doc.block, flagged }]);
+          if (flagged) setAttachError(t('composer.attachFlagged'));
+          inputRef.current?.focus();
+        })
+        .catch(() => setAttachError(t('composer.attachReadError')));
     });
     picker.click();
   };
@@ -106,6 +147,23 @@ export default function Composer({ value, onChange, onSend, onStop, busy, reason
   return (
     <div className="dock">
       <form className="composer" id="composer" autoComplete="off" onSubmit={submit}>
+        {attachments.length > 0 ? (
+          <ul className="composer__attachments">
+            {attachments.map((a) => (
+              <li key={a.id} className="composer__attachment">
+                <span className="composer__attachment-name">{a.flagged ? '⚠ ' : ''}{a.name}</span>
+                <button
+                  type="button"
+                  className="composer__attachment-remove"
+                  aria-label={t('composer.removeAttachmentAriaLabel')}
+                  onClick={() => removeAttachment(a.id)}
+                >
+                  ×
+                </button>
+              </li>
+            ))}
+          </ul>
+        ) : null}
         <textarea
           id="input"
           ref={inputRef}
@@ -176,7 +234,11 @@ export default function Composer({ value, onChange, onSend, onStop, busy, reason
           )}
         </div>
       </form>
-      {voiceError ? <p className="disclaimer disclaimer--error">{voiceError}</p> : <p className="disclaimer">{t('composer.disclaimer')}</p>}
+      {voiceError || attachError ? (
+        <p className="disclaimer disclaimer--error">{voiceError || attachError}</p>
+      ) : (
+        <p className="disclaimer">{t('composer.disclaimer')}</p>
+      )}
     </div>
   );
 }

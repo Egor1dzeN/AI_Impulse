@@ -6,7 +6,7 @@ from typing import Any
 
 import requests
 
-from . import google_oauth
+from . import db, google_oauth
 
 GOOGLE_CALENDAR_REDIRECT_URI = os.environ.get(
     "GOOGLE_CALENDAR_REDIRECT_URI", "http://127.0.0.1:8001/api/google-calendar/callback"
@@ -53,6 +53,63 @@ def _get_access_token(refresh_token: str) -> str:
 
 def revoke(refresh_token: str) -> None:
     google_oauth.revoke(refresh_token)
+
+
+def create_event_raw(refresh_token: str, summary: str, start: dict[str, Any], end: dict[str, Any], description: str | None = None) -> dict[str, Any]:
+    """Like create_event() above, but takes start/end straight in the
+    Google Calendar resource shape ({"date": "YYYY-MM-DD"} for an all-day
+    event, or {"dateTime": ..., "timeZone": ...} for a timed one) instead
+    of a single naive local datetime + duration. Used by the Data Import
+    panel (see main.py's import_calendar_to_google()), since an imported
+    record already carries that shape — reminders are left at Google's
+    default there, unlike the popup-reminder tool-created events above,
+    since these are historical/bulk records, not live reminders for the
+    user to be notified about right now."""
+    access_token = _get_access_token(refresh_token)
+
+    body = {"summary": summary, "description": description, "start": start, "end": end}
+
+    resp = requests.post(
+        EVENTS_ENDPOINT,
+        headers={"Authorization": f"Bearer {access_token}"},
+        json=body,
+        timeout=10,
+    )
+    resp.raise_for_status()
+    event = resp.json()
+    return {"id": event.get("id"), "summary": event.get("summary"), "html_link": event.get("htmlLink")}
+
+
+def imported_google_event_id(user_id: str, external_id: str) -> str | None:
+    with db.get_conn() as conn:
+        row = conn.execute(
+            "SELECT google_event_id FROM imported_calendar_events WHERE user_id = ? AND external_id = ?",
+            (user_id, external_id),
+        ).fetchone()
+    return row["google_event_id"] if row else None
+
+
+def mark_imported(user_id: str, external_id: str, google_event_id: str) -> None:
+    with db.get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO imported_calendar_events (user_id, external_id, google_event_id, created_at) "
+            "VALUES (?, ?, ?, ?)",
+            (user_id, external_id, google_event_id, db.now_iso()),
+        )
+
+
+def action_already_done(draft_id: str) -> bool:
+    with db.get_conn() as conn:
+        row = conn.execute("SELECT 1 FROM calendar_action_drafts WHERE draft_id = ?", (draft_id,)).fetchone()
+    return row is not None
+
+
+def mark_action_done(draft_id: str, user_id: str) -> None:
+    with db.get_conn() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO calendar_action_drafts (draft_id, user_id, done_at) VALUES (?, ?, ?)",
+            (draft_id, user_id, db.now_iso()),
+        )
 
 
 def list_events(refresh_token: str, date: str, days: int = 1) -> list[dict[str, Any]]:
@@ -142,3 +199,61 @@ def create_event(
         "start": start_iso,
         "html_link": event.get("htmlLink"),
     }
+
+
+def update_event(
+    refresh_token: str,
+    event_id: str,
+    summary: str | None = None,
+    start_iso: str | None = None,
+    duration_minutes: int | None = None,
+    description: str | None = None,
+) -> dict[str, Any]:
+    """Patch an existing event — only fields the caller actually passes are
+    changed. `duration_minutes` only has an effect together with
+    `start_iso` (the new end time is computed from the new start), since
+    PATCHing just `end` while leaving a stale `start` could invert the
+    interval."""
+    access_token = _get_access_token(refresh_token)
+
+    body: dict[str, Any] = {}
+    if summary is not None:
+        body["summary"] = summary
+    if description is not None:
+        body["description"] = description
+    if start_iso is not None:
+        start_dt = datetime.fromisoformat(start_iso)
+        end_dt = start_dt + timedelta(minutes=duration_minutes if duration_minutes is not None else 30)
+        body["start"] = {"dateTime": start_dt.isoformat(), "timeZone": TIMEZONE}
+        body["end"] = {"dateTime": end_dt.isoformat(), "timeZone": TIMEZONE}
+
+    resp = requests.patch(
+        f"{EVENTS_ENDPOINT}/{event_id}",
+        headers={"Authorization": f"Bearer {access_token}"},
+        json=body,
+        timeout=10,
+    )
+    resp.raise_for_status()
+    event = resp.json()
+    start = event.get("start", {})
+    return {
+        "id": event.get("id"),
+        "summary": event.get("summary"),
+        "start": start.get("dateTime", start.get("date")),
+        "html_link": event.get("htmlLink"),
+    }
+
+
+def delete_event(refresh_token: str, event_id: str) -> None:
+    access_token = _get_access_token(refresh_token)
+
+    resp = requests.delete(
+        f"{EVENTS_ENDPOINT}/{event_id}",
+        headers={"Authorization": f"Bearer {access_token}"},
+        timeout=10,
+    )
+    # Google returns 410 Gone for an already-deleted event — treat that
+    # the same as success rather than surfacing it as an error, since the
+    # end state (event gone) is what the caller actually wants.
+    if resp.status_code not in (204, 410):
+        resp.raise_for_status()

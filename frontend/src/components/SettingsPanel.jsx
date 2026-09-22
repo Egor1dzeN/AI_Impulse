@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
+  deleteAllAccountData,
   disconnectGmail,
   disconnectGoogleCalendar,
   fetchSettings,
@@ -40,11 +41,14 @@ export default function SettingsPanel({ open, onClose }) {
   const [gmailDisconnecting, setGmailDisconnecting] = useState(false);
   const [gmailError, setGmailError] = useState('');
 
+  const [deleteState, setDeleteState] = useState('idle'); // idle | confirming | deleting | done | error
+
   useEffect(() => {
     if (!open) return;
     setError('');
     setKeyInput('');
     setShowConnectForm(false);
+    setDeleteState('idle');
     setLoading(true);
     fetchSettings()
       .then((s) => {
@@ -180,6 +184,17 @@ export default function SettingsPanel({ open, onClose }) {
       // leave the current state on screen if the request failed
     } finally {
       setGmailDisconnecting(false);
+    }
+  }
+
+  async function confirmDeleteAllData() {
+    if (deleteState === 'deleting') return;
+    setDeleteState('deleting');
+    try {
+      await deleteAllAccountData();
+      setDeleteState('done');
+    } catch {
+      setDeleteState('error');
     }
   }
 
@@ -325,6 +340,36 @@ export default function SettingsPanel({ open, onClose }) {
               {gmailError && <p className="settings-panel__hint settings-panel__hint--error">{gmailError}</p>}
             </>
           )}
+        </section>
+
+        <section className="settings-panel__danger-zone">
+          <h3>{t('settings.dangerZoneTitle')}</h3>
+          <p className="settings-panel__hint">{t('settings.deleteAllDataHint')}</p>
+          {deleteState === 'done' ? (
+            <p className="settings-panel__hint">{t('settings.deleteAllDataDone')}</p>
+          ) : deleteState === 'confirming' ? (
+            <>
+              <p className="settings-panel__hint settings-panel__hint--error">{t('settings.deleteAllDataConfirmPrompt')}</p>
+              <div className="email-draft__actions">
+                <button type="button" className="ghost ghost--danger" onClick={confirmDeleteAllData}>
+                  {t('settings.deleteAllDataConfirm')}
+                </button>
+                <button type="button" className="ghost" onClick={() => setDeleteState('idle')}>
+                  {t('settings.deleteAllDataCancel')}
+                </button>
+              </div>
+            </>
+          ) : (
+            <button
+              type="button"
+              className="ghost ghost--danger"
+              onClick={() => setDeleteState('confirming')}
+              disabled={deleteState === 'deleting'}
+            >
+              {deleteState === 'deleting' ? t('settings.deleteAllDataDeleting') : t('settings.deleteAllData')}
+            </button>
+          )}
+          {deleteState === 'error' && <p className="settings-panel__hint settings-panel__hint--error">{t('settings.deleteAllDataError')}</p>}
         </section>
       </div>
     </div>

@@ -20,7 +20,7 @@ from memory_updater import MemoryUpdater
 
 from memory_store import MemoryStore
 
-from models import Memory
+from models import Memory, Source
 
 
 @dataclass
@@ -76,6 +76,7 @@ class MemoryPipeline:
         self,
         text: str,
         user_id: str,
+        source: Source | None = None,
     ) -> MemoryPipelineResult:
 
         # =====================================================
@@ -108,6 +109,7 @@ class MemoryPipeline:
                 text=text,
                 user_id=user_id,
                 context=context,
+                source=source,
             )
         )
 

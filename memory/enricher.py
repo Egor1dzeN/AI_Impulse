@@ -242,11 +242,13 @@ class MemoryEnricher:
         text: str,
         user_id: str,
         context: MemoryContext | None,
+        source: Source | None = None,
     ) -> tuple[list[MemoryCandidate], bool]:
         candidates = self.extractor.extract(
             text=text,
             user_id=user_id,
             context=context,
+            source=source,
         )
 
         if not candidates:
@@ -295,6 +297,7 @@ class MemoryEnricher:
         text: str,
         user_id: str,
         context: MemoryContext | None = None,
+        source: Source | None = None,
     ) -> list[EnrichedMemoryCandidate]:
         """
         Main enrichment path.
@@ -303,6 +306,15 @@ class MemoryEnricher:
             "fast"    -> deterministic result from UnifiedMemoryAnalyzer
             "unified" -> one Qwen3-4B unified analysis
             "legacy"  -> old extractor pipeline (fallback only)
+
+        `source` identifies where `text` came from (email/telegram/
+        calendar/chat/...) and, via its `created_at`, when the underlying
+        event happened — as opposed to when this pipeline run processed it.
+        Threaded all the way down into extraction so every resulting Memory
+        records a real source and validity period instead of defaulting to
+        a bare "text" source stamped with the ingestion time (see
+        memory_updater.py's _create_memory/_conflict, which prefer
+        source.created_at over utcnow() for valid_from).
         """
 
         route_mode = "legacy"
@@ -317,6 +329,7 @@ class MemoryEnricher:
                     text=text,
                     user_id=user_id,
                     context=context,
+                    source=source,
                 )
 
                 candidates = unified.candidates
@@ -342,6 +355,7 @@ class MemoryEnricher:
                     text=text,
                     user_id=user_id,
                     context=context,
+                    source=source,
                 )
 
                 route_mode = "legacy"
@@ -350,6 +364,7 @@ class MemoryEnricher:
                 text=text,
                 user_id=user_id,
                 context=context,
+                source=source,
             )
 
             route_mode = "legacy"

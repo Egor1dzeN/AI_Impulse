@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { addMemory, deleteMemory, dreamMemories, fetchMemories, fetchSandbox, searchMemories } from '../lib/api';
+import { addMemory, deleteMemory, dreamMemories, exportMemories, fetchMemories, fetchSandbox, searchMemories } from '../lib/api';
 import { useI18n } from '../lib/i18n.jsx';
 
 export default function MemoryPanel({ open, onClose }) {
@@ -21,6 +21,25 @@ export default function MemoryPanel({ open, onClose }) {
 
   function loadMemories() {
     return fetchMemories().then(setMemories);
+  }
+
+  async function downloadExport() {
+    const blob = await exportMemories();
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'profile_export.json';
+    link.click();
+    URL.revokeObjectURL(url);
+  }
+
+  function factMeta(m) {
+    const source = (m.sources || [])[0];
+    const parts = [];
+    if (source) parts.push(`${t('memoryPanel.sourceLabel')}: ${source.title || source.type}${source.created_at ? `, ${source.created_at.slice(0, 10)}` : ''}`);
+    if (m.valid_from) parts.push(`${t('memoryPanel.validFromLabel')} ${m.valid_from.slice(0, 10)}`);
+    if (m.valid_until) parts.push(`${t('memoryPanel.validUntilLabel')} ${m.valid_until.slice(0, 10)}`);
+    return parts.join(' · ');
   }
 
   useEffect(() => {
@@ -117,6 +136,9 @@ export default function MemoryPanel({ open, onClose }) {
         <section>
           <div className="memory-panel__section-head">
             <h3>{t('memoryPanel.aboutYou')}</h3>
+            <button type="button" className="ghost" onClick={() => downloadExport().catch(() => {})}>
+              {t('memoryPanel.exportButton')}
+            </button>
             <span className="tooltip">
               <button
                 type="button"
@@ -174,7 +196,10 @@ export default function MemoryPanel({ open, onClose }) {
             {(searchResults ?? memories).map((m) => (
               <li key={m.id}>
                 <span className="memory-list__type">{TYPE_LABELS[m.type] || m.type}</span>
-                <span className="memory-list__content">{m.content}</span>
+                <span className="memory-list__content">
+                  {m.content}
+                  {factMeta(m) && <small className="memory-list__meta">{factMeta(m)}</small>}
+                </span>
                 <button
                   type="button"
                   className="memory-list__remove"
@@ -202,7 +227,13 @@ export default function MemoryPanel({ open, onClose }) {
                 </li>
               ))}
               {sandbox.expenses.slice(0, 5).map((e) => (
-                <li key={e.id}>{t('memoryPanel.expenseLine', { amount: e.amount, category: e.category, date: e.date })}</li>
+                <li key={e.id}>
+                  {t(e.type === 'income' ? 'memoryPanel.incomeLine' : 'memoryPanel.expenseLine', {
+                    amount: e.amount,
+                    category: e.category,
+                    date: e.date,
+                  })}
+                </li>
               ))}
               {sandbox.meals.slice(0, 5).map((m) => (
                 <li key={m.id}>{t('memoryPanel.mealLine', { name: m.name, kcal: m.kcal, date: m.date })}</li>

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -49,6 +49,13 @@ class AddMemoryRequest(BaseModel):
     content: str
 
 
+class MemorySourceOut(BaseModel):
+    type: str
+    id: str
+    title: str | None = None
+    created_at: str | None = None
+
+
 class MemoryOut(BaseModel):
     id: str
     type: str
@@ -57,6 +64,9 @@ class MemoryOut(BaseModel):
     importance: float
     status: str
     created_at: str
+    sources: list[MemorySourceOut] = []
+    valid_from: str | None = None
+    valid_until: str | None = None
 
 
 class MemorySearchOut(MemoryOut):
@@ -70,6 +80,25 @@ class SandboxOut(BaseModel):
     weights: list[dict[str, Any]]
 
 
+class TransactionOut(BaseModel):
+    id: str
+    amount: float
+    type: str
+    category: str
+    note: str | None = None
+    date: str
+    created_at: str
+
+
+class FinanceSummaryOut(BaseModel):
+    total_expense: float
+    total_income: float
+    balance: float
+    by_month: dict[str, dict[str, float]]
+    expense_by_category: dict[str, float]
+    income_by_category: dict[str, float]
+
+
 class SettingsOut(BaseModel):
     intervals_icu_connected: bool
     google_calendar_connected: bool
@@ -81,6 +110,16 @@ class SendEmailRequest(BaseModel):
     to: str
     subject: str
     body: str
+
+
+class CalendarActionRequest(BaseModel):
+    draft_id: str
+    kind: Literal["create", "update", "delete"]
+    event_id: str | None = None  # required for update/delete
+    title: str | None = None
+    start_time: str | None = None
+    duration_minutes: int | None = None
+    notes: str | None = None
 
 
 class UpdateSettingsRequest(BaseModel):

@@ -45,6 +45,12 @@ class Source:
     created_at: datetime | None = None
     url: str | None = None
 
+    # Event end time, when the source represents something with a
+    # duration (e.g. a calendar event's start/end) rather than an instant.
+    # None for sources that only have a single point in time (email sent
+    # date, chat message timestamp, ...).
+    end_at: datetime | None = None
+
 
 # ============================================================
 # EVENT

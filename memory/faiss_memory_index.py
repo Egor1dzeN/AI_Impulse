@@ -82,6 +82,27 @@ class FaissMemoryIndex:
         if signatures:
             self.memory_signatures.update(signatures)
 
+    def remove(self, memory_ids: Iterable[str]) -> int:
+        """Drop vectors by memory id without re-embedding anything: the flat
+        index keeps the (already normalized) vectors, so the survivors are
+        copied into a fresh index as-is."""
+        drop = set(memory_ids) & set(self.memory_ids)
+        if not drop:
+            return 0
+
+        keep = [i for i, memory_id in enumerate(self.memory_ids) if memory_id not in drop]
+        vectors = self.index.reconstruct_n(0, self.index.ntotal)
+
+        index = faiss.IndexFlatIP(self.dimension)
+        if keep:
+            index.add(np.ascontiguousarray(vectors[keep], dtype=np.float32))
+
+        self.index = index
+        self.memory_ids = [self.memory_ids[i] for i in keep]
+        for memory_id in drop:
+            self.memory_signatures.pop(memory_id, None)
+        return len(drop)
+
     def build(
         self,
         memories: Iterable[Memory],

@@ -144,4 +144,17 @@ def get_current_user_id(authorization: str | None = Header(None)) -> str:
         raise HTTPException(status_code=401, detail="missing bearer token")
 
     token = authorization.removeprefix("Bearer ").strip()
-    return decode_access_token(token)
+    user_id = decode_access_token(token)
+
+    # decode_access_token only checks the JWT's own signature/expiry — a
+    # signed-and-unexpired token for a user_id whose row was since deleted
+    # (e.g. a DB reset) used to pass straight through, since chat/memory
+    # tables have no FK on users. Every request now confirms the account
+    # still exists, closing that "ghost user" gap uniformly instead of only
+    # at the few write endpoints that separately check for it.
+    with db.get_conn() as conn:
+        exists = conn.execute("SELECT 1 FROM users WHERE id = ?", (user_id,)).fetchone()
+    if not exists:
+        raise HTTPException(status_code=401, detail="account no longer exists — log out and log back in")
+
+    return user_id

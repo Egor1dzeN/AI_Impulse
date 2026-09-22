@@ -3,11 +3,13 @@ import OrbCanvas from './components/OrbCanvas';
 import Chat from './components/Chat';
 import Composer from './components/Composer';
 import MemoryPanel from './components/MemoryPanel';
+import FinancePanel from './components/FinancePanel';
+import ImportPanel from './components/ImportPanel';
 import ChatList from './components/ChatList';
 import SettingsPanel from './components/SettingsPanel';
 import Menu from './components/Menu';
 import Login from './components/Login';
-import { createConversation, fetchConversations, fetchHistory, sendChat } from './lib/api';
+import { createConversation, fetchConversations, fetchHistory, fetchProactive, sendChat } from './lib/api';
 import { getUsername, isAuthenticated, logout } from './lib/auth';
 import { getReasoningEnabled, setReasoningEnabled } from './lib/settings';
 import { useI18n } from './lib/i18n.jsx';
@@ -24,6 +26,8 @@ export default function App() {
   const [busy, setBusy] = useState(false);
   const [isChat, setIsChat] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
+  const [financeOpen, setFinanceOpen] = useState(false);
+  const [importOpen, setImportOpen] = useState(false);
   const [chatListOpen, setChatListOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [conversationId, setConversationId] = useState(null);
@@ -31,9 +35,27 @@ export default function App() {
   const [sendTick, setSendTick] = useState(0);
   const [historyScrollTick, setHistoryScrollTick] = useState(0);
   const [reasoning, setReasoning] = useState(getReasoningEnabled);
+  const [proactive, setProactive] = useState([]);
 
   const orbRef = useRef(null);
   const mainRef = useRef(null);
+
+  // What the assistant noticed on its own (overdue replies, conflicts,
+  // spending spikes...) — refreshed whenever the start screen is shown.
+  useEffect(() => {
+    if (!authed || isChat) return;
+    let cancelled = false;
+    fetchProactive()
+      .then((res) => {
+        if (!cancelled) setProactive(res.suggestions || []);
+      })
+      .catch(() => {
+        if (!cancelled) setProactive([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [authed, isChat]);
   const heroRef = useRef(null);
   const abortedRef = useRef(false);
   const controllerRef = useRef(null);
@@ -154,6 +176,11 @@ export default function App() {
           updateMessage(aiId, { content: acc, status: 'revealing' });
         } else if (event.type === 'done') {
           action = event.action;
+          // The backend may have rewritten the saved text (e.g. cleaning
+          // up a raw "[sources=[N]]" citation tag the model streamed as
+          // tokens) — prefer that final version over our own accumulation
+          // so what's shown matches what's actually saved.
+          if (typeof event.reply === 'string') acc = event.reply;
         }
       }, reasoning);
       if (abortedRef.current) {
@@ -260,6 +287,12 @@ export default function App() {
           <button className="ghost" type="button" onClick={() => setMemoryOpen(true)}>
             {t('common.memory')}
           </button>
+          <button className="ghost" type="button" onClick={() => setFinanceOpen(true)}>
+            {t('common.finance')}
+          </button>
+          <button className="ghost" type="button" onClick={() => setImportOpen(true)}>
+            {t('common.import')}
+          </button>
           <button className="ghost" id="reset" type="button" onClick={startNewChat}>
             <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>
             {t('common.newChat')}
@@ -289,6 +322,23 @@ export default function App() {
           <section className="hero" id="hero" ref={heroRef}>
             <h1 className="hero__title">{t('hero.title')}</h1>
             <p className="hero__sub">{t('hero.sub')}</p>
+            {proactive.length > 0 && (
+              <div className="proactive">
+                <p className="proactive__title">{t('proactive.title')}</p>
+                {proactive.map((p) => (
+                  <button
+                    key={p.title}
+                    type="button"
+                    className={`proactive__item proactive__item--${p.priority}`}
+                    onClick={() => send(p.prompt)}
+                  >
+                    <span className="proactive__head">{p.title}</span>
+                    <span className="proactive__details">{p.details}</span>
+                    <span className="proactive__action">{p.suggested_action}</span>
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="chips" id="chips">
               {CHIPS.map((c) => (
                 <button key={c} className="chip" type="button" onClick={() => send(c)}>
@@ -313,6 +363,10 @@ export default function App() {
       />
 
       <MemoryPanel open={memoryOpen} onClose={() => setMemoryOpen(false)} />
+
+      <FinancePanel open={financeOpen} onClose={() => setFinanceOpen(false)} />
+
+      <ImportPanel open={importOpen} onClose={() => setImportOpen(false)} />
 
       <ChatList
         open={chatListOpen}

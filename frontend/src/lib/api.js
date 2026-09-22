@@ -10,7 +10,20 @@ function authHeaders(extra = {}) {
 }
 
 async function json(res) {
-  if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    // FastAPI's HTTPException bodies are {"detail": "..."} — surface that
+    // real reason (e.g. "Google Calendar access was revoked — reconnect it
+    // in Settings") instead of a bare status code wherever a caller shows
+    // the error message to the user.
+    let detail = `${res.status} ${res.statusText}`;
+    try {
+      const body = await res.json();
+      if (body && typeof body.detail === 'string') detail = body.detail;
+    } catch {
+      // non-JSON or empty error body — keep the status line
+    }
+    throw new Error(detail);
+  }
   return res.json();
 }
 
@@ -99,6 +112,14 @@ export function fetchSandbox() {
   return fetch(`${BASE}/api/sandbox`, { headers: authHeaders() }).then(json);
 }
 
+export function fetchFinanceTransactions() {
+  return fetch(`${BASE}/api/finance/transactions`, { headers: authHeaders() }).then(json);
+}
+
+export function fetchFinanceSummary() {
+  return fetch(`${BASE}/api/finance/summary`, { headers: authHeaders() }).then(json);
+}
+
 export function fetchSettings() {
   return fetch(`${BASE}/api/settings`, { headers: authHeaders() }).then(json);
 }
@@ -136,11 +157,48 @@ export function disconnectGmail() {
   }).then(json);
 }
 
+export function importData({ file, source, replace, syncCalendar }) {
+  const form = new FormData();
+  form.append('file', file);
+  form.append('source', source);
+  form.append('replace', replace ? 'true' : 'false');
+  form.append('sync_calendar', syncCalendar ? 'true' : 'false');
+  // No Content-Type header here either — see transcribeAudio above.
+  return fetch(`${BASE}/api/import`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: form,
+  }).then(json);
+}
+
+export function deleteAllAccountData() {
+  return fetch(`${BASE}/api/account/data`, {
+    method: 'DELETE',
+    headers: authHeaders(),
+  }).then(json);
+}
+
 export function sendEmail({ draftId, to, subject, body }) {
   return fetch(`${BASE}/api/gmail/send`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
     body: JSON.stringify({ draft_id: draftId, to, subject, body }),
+  }).then(json);
+}
+
+export function confirmCalendarAction({ draftId, kind, eventId, title, startTime, durationMinutes, notes }) {
+  return fetch(`${BASE}/api/calendar/confirm`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({
+      draft_id: draftId,
+      kind,
+      event_id: eventId,
+      title,
+      start_time: startTime,
+      duration_minutes: durationMinutes,
+      notes,
+    }),
   }).then(json);
 }
 
@@ -156,4 +214,25 @@ export function transcribeAudio(blob) {
     headers: authHeaders(),
     body: form,
   }).then(json);
+}
+
+export function extractDocument(file) {
+  const form = new FormData();
+  form.append('file', file, file.name);
+  return fetch(`${BASE}/api/documents/extract`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: form,
+  }).then(json);
+}
+
+export function fetchProactive() {
+  return fetch(`${BASE}/api/proactive`, { headers: authHeaders() }).then(json);
+}
+
+export function exportMemories() {
+  return fetch(`${BASE}/api/memories/export`, { headers: authHeaders() }).then((res) => {
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    return res.blob();
+  });
 }

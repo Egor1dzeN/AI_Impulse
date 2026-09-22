@@ -34,6 +34,21 @@ class MemoryUpdater:
         metadata: dict = {}
 
         # -----------------------------------------------------
+        # Event start/end (calendar sources carry a duration; see
+        # Source.end_at — created_at doubles as the start time, already
+        # mirrored into Memory.valid_from below).
+        # -----------------------------------------------------
+
+        source = candidate.candidate.source
+
+        if source.end_at is not None:
+            metadata["event_start"] = (
+                source.created_at.isoformat()
+                if source.created_at else None
+            )
+            metadata["event_end"] = source.end_at.isoformat()
+
+        # -----------------------------------------------------
         # Subject
         # -----------------------------------------------------
 
@@ -145,6 +160,14 @@ class MemoryUpdater:
     ) -> Memory:
 
         now = datetime.utcnow()
+        # A bulk-ingested email/telegram/calendar record's source carries
+        # the ORIGINAL event date (e.g. when the email was sent) — prefer
+        # that for valid_from over "now" (when this pipeline run happened),
+        # so the fact's validity period reflects reality instead of
+        # ingestion time. Falls back to now for plain live chat text, whose
+        # source has no created_at (see extractor_contextual.extract()'s
+        # default Source).
+        valid_from = candidate.candidate.source.created_at or now
 
         metadata = self._build_metadata(
             candidate
@@ -166,7 +189,7 @@ class MemoryUpdater:
             ],
             created_at=now,
             updated_at=now,
-            valid_from=now,
+            valid_from=valid_from,
             metadata=metadata,
         )
 
@@ -411,6 +434,9 @@ class MemoryUpdater:
 
         candidate = decision.candidate
 
+        # See _create_memory's comment above — same reasoning.
+        valid_from = candidate.candidate.source.created_at or now
+
         metadata = self._build_metadata(
             candidate
         )
@@ -431,7 +457,7 @@ class MemoryUpdater:
             ],
             created_at=now,
             updated_at=now,
-            valid_from=now,
+            valid_from=valid_from,
             metadata=metadata,
         )
 

@@ -2,15 +2,17 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import date
+import re
 from typing import Any, Iterator
 
+from gigachat.exceptions import GigaChatException, RateLimitError
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.errors import GraphRecursionError
 
-from . import agent_graph, conversations, db, memory_bridge, user_settings
+from . import agent_graph, conversations, db, memory_bridge, personal_data, user_settings
+from .masking import mask_sensitive
 from .prompts import build_system_prompt
-from .tools import MEMORY_TOOL_NAME
+from .tools import MEMORY_TOOL_NAMES
 
 # Each round of the agent loop is 2 super-steps (agent -> tools), so this
 # allows roughly 10 rounds of tool calls (memory searches and/or actions)
@@ -28,10 +30,10 @@ MAX_ATTEMPTS = 2
 
 # How many of the most recent saved messages (both roles combined) to feed
 # back in as short-term conversational context, on top of whatever the
-# agent pulls from long-term memory via search_memory. Kept small since
-# this is a local model — every extra message lengthens the prompt and
-# slows generation.
-HISTORY_MESSAGE_LIMIT = 10
+# agent pulls from long-term memory via search_memory. Was kept small for
+# a local model with a tight context window; raised now that the chat
+# model has a much larger context budget to spend.
+HISTORY_MESSAGE_LIMIT = 30
 
 # Tools whose replies are cheap to re-fetch and easy for a small model to
 # latch onto: seeing its own "Сегодня в Сиднее +18°C..." sitting right in
@@ -120,22 +122,31 @@ def handle_chat_turn_stream(
         user_id, conversation_id, _log_repr(message),
     )
 
+    message = mask_sensitive(message)
     graph = agent_graph.build_graph(user_id, enable_thinking=enable_thinking)
     system_prompt = build_system_prompt(
-        today=date.today().isoformat(),
+        today=_describe_now(user_id),
         intervals_icu_connected=bool(user_settings.get_intervals_icu_key(user_id)),
         google_calendar_connected=bool(user_settings.get_google_calendar_refresh_token(user_id)),
         gmail_connected=bool(user_settings.get_gmail_refresh_token(user_id)),
     )
     history = _load_recent_history(user_id, conversation_id)
     logger.info("chat turn: loaded %d short-term history message(s) for conversation_id=%s", len(history), conversation_id)
+
+    # Nudges the model to consider search_memory without permanently baking
+    # the reminder into the saved/displayed message — only the LLM's own
+    # input gets it, _save_message() below still stores the user's real
+    # text, so history/page-reload doesn't show this appended onto every
+    # message.
+    llm_message = f"{message}\n\nНе забудь посмотреть в память, вдруг там что-то важное"
     inputs = {
-        "messages": [SystemMessage(content=system_prompt), *history, HumanMessage(content=message)],
+        "messages": [SystemMessage(content=system_prompt), *history, HumanMessage(content=llm_message)],
     }
     config = {"recursion_limit": RECURSION_LIMIT}
 
     reply_parts: list[str] = []
     last_action: dict[str, Any] | None = None
+    web_search_sources: list[dict[str, Any]] = []
 
     for attempt in range(1, MAX_ATTEMPTS + 1):
         reply_parts = []
@@ -143,6 +154,8 @@ def handle_chat_turn_stream(
         had_tool_call = False
         pending_calls: dict[str, dict[str, Any]] = {}
         recursion_hit = False
+        llm_error: str | None = None
+        web_search_sources = []
 
         try:
             for mode, payload in graph.stream(inputs, config=config, stream_mode=["messages", "updates"]):
@@ -182,17 +195,51 @@ def handle_chat_turn_stream(
                                 user_id, name, _log_repr(arguments), _log_repr(result),
                             )
                             yield {"type": "tool_call", "tool": name, "arguments": arguments}
-                            if name != MEMORY_TOOL_NAME:
+                            if name not in MEMORY_TOOL_NAMES:
                                 last_action = {"tool": name, "arguments": arguments, "result": result}
+                            if name == "web_search" and isinstance(result, dict):
+                                # Flattened in call order across every
+                                # web_search this turn — matches how the
+                                # model itself numbers "[sources=[N]]"
+                                # citations (see _rewrite_source_citations).
+                                web_search_sources.extend(result.get("results") or [])
         except GraphRecursionError:
             recursion_hit = True
             logger.warning(
                 "recursion limit (%d) hit for user_id=%s conversation_id=%s message=%r",
                 RECURSION_LIMIT, user_id, conversation_id, message,
             )
+        except RateLimitError:
+            # GigaChat's own quota, not this app's — retrying immediately
+            # would just hit the same 429, so surface it plainly instead of
+            # burning another attempt (or letting it propagate and blow up
+            # the whole SSE response, which is what happened before this
+            # was added: an uncaught exception mid-stream crashes the
+            # generator and the frontend gets nothing but a broken request).
+            llm_error = "rate_limit"
+            logger.warning(
+                "GigaChat rate limit hit for user_id=%s conversation_id=%s", user_id, conversation_id,
+            )
+        except GigaChatException:
+            llm_error = "llm_error"
+            logger.exception(
+                "GigaChat request failed for user_id=%s conversation_id=%s", user_id, conversation_id,
+            )
 
         if recursion_hit:
             fallback = "Не получилось сформировать ответ за отведённое число шагов. Попробуй переформулировать вопрос."
+            reply_parts = [fallback]
+            yield {"type": "token", "text": fallback}
+            break
+
+        if llm_error == "rate_limit":
+            fallback = "Сейчас слишком много запросов к модели — лимит GigaChat временно исчерпан. Подождите немного и попробуйте снова."
+            reply_parts = [fallback]
+            yield {"type": "token", "text": fallback}
+            break
+
+        if llm_error == "llm_error":
+            fallback = "Не получилось получить ответ от модели — ошибка на стороне GigaChat. Попробуйте ещё раз через некоторое время."
             reply_parts = [fallback]
             yield {"type": "token", "text": fallback}
             break
@@ -216,6 +263,8 @@ def handle_chat_turn_stream(
         )
         yield {"type": "token", "text": reply}
 
+    reply = mask_sensitive(_humanize_sources(_rewrite_source_citations(reply, web_search_sources)))
+
     _save_message(user_id, conversation_id, "user", message, None)
     _save_message(user_id, conversation_id, "assistant", reply, last_action)
     conversations.touch_and_maybe_title(conversation_id, message)
@@ -225,7 +274,88 @@ def handle_chat_turn_stream(
         user_id, conversation_id, _log_repr(reply), last_action["tool"] if last_action else None,
     )
 
-    yield {"type": "done", "action": last_action}
+    # `reply` here (unlike the raw tokens streamed above) is the corrected,
+    # saved text — includes it so the frontend can replace its streamed
+    # accumulation with the same string _rewrite_source_citations() fixed
+    # up, instead of keeping whatever raw "[sources=[N]]" tag streamed by.
+    yield {"type": "done", "action": last_action, "reply": reply}
+
+
+_SOURCE_CITATION_RE = re.compile(r" ?\[\s*sources?\s*=\s*\[\s*(\d+(?:\s*,\s*\d+)*)\s*\]\s*\]", re.IGNORECASE)
+
+
+def _rewrite_source_citations(text: str, sources: list[dict[str, Any]]) -> str:
+    """The underlying model cites web_search hits with a bare
+    "[sources=[N]]" / "[sources=[N, M]]" tag no matter how firmly
+    WEB_SEARCH_INSTRUCTIONS (prompts.py) asks for a real markdown link
+    instead — observed to persist across turns despite the instruction, so
+    this rewrites it after the fact rather than relying on the prompt
+    alone. `sources` is the flattened, call-ordered list of every
+    web_search result this turn — N is 1-based into it, matching how the
+    model itself numbers them. Falls back to just dropping the tag when
+    there were no web_search results to map it to, or the index is out of
+    range, since a raw tag leaking into the reply is worse than a missing
+    citation."""
+    if not text:
+        return text
+
+    def replace(match: "re.Match[str]") -> str:
+        indices = [int(n) for n in re.findall(r"\d+", match.group(1))]
+        links = []
+        for i in indices:
+            if 1 <= i <= len(sources):
+                src = sources[i - 1]
+                url = src.get("url")
+                title = src.get("title") or url
+                if url:
+                    links.append(f"[{title}]({url})")
+        return f" ({', '.join(links)})" if links else ""
+
+    result = _SOURCE_CITATION_RE.sub(replace, text)
+    return re.sub(r" {2,}", " ", result)
+
+
+_TECH_TERMS = {
+    "schedule_analysis": "анализ расписания",
+    "calendar_events": "календарь",
+    "get_calendar_events": "Google Календарь",
+    "recurring_schedule": "регулярные события",
+    "inbox_overview": "входящие письма",
+    "search_emails": "почта",
+    "get_email_thread": "переписка по письму",
+    "list_emails": "почта",
+    "search_messages": "переписка в Telegram",
+    "search_memory": "профиль пользователя",
+    "list_memories": "профиль пользователя",
+    "finance_report": "банковские операции",
+    "monthly_cashflow": "банковские операции",
+    "top_contacts": "встречи, письма и чаты",
+    "data_overview": "загруженные данные",
+    "proactive_suggestions": "анализ данных",
+    "next_week": "следующая неделя",
+    "this_week": "эта неделя",
+    "last_week": "прошлая неделя",
+    "last_month": "прошлый месяц",
+    "month_before_last": "позапрошлый месяц",
+    "this_month": "этот месяц",
+    "last_3_days": "последние 3 дня",
+    "last_7_days": "последние 7 дней",
+}
+_TECH_RE = re.compile(r"\b(" + "|".join(sorted(map(re.escape, _TECH_TERMS), key=len, reverse=True)) + r")\b(\s*\([^)]*\))?")
+
+
+def _humanize_sources(text: str) -> str:
+    """Explainability must not show raw technical traces: tool names and
+    period keywords the model sometimes echoes are replaced with plain words."""
+    return _TECH_RE.sub(lambda m: _TECH_TERMS[m.group(1)] + (m.group(2) or ""), text)
+
+
+_WEEKDAYS_RU = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
+
+
+def _describe_now(user_id: str) -> str:
+    now = personal_data.now_local(user_id)
+    return f"{_WEEKDAYS_RU[now.weekday()]}, {now:%d.%m.%Y %H:%M} ({now.tzinfo}); ISO-дата {now:%Y-%m-%d}"
 
 
 def _parse_tool_result(content: Any) -> Any:
@@ -258,6 +388,20 @@ def _save_message(
 
 
 def extract_memory_background(user_id: str, message: str) -> None:
+    """Runs as a FastAPI BackgroundTask, after the chat response has already
+    been sent — a failure here can't affect the reply the user saw, but left
+    uncaught it still surfaces as a scary unhandled-exception traceback in
+    the server log for every rate-limited turn. This message's facts are
+    simply not extracted this time; the next turn's background call (or a
+    future dream/consolidation pass) gets another chance."""
+    message = mask_sensitive(message)
     logger.info("background memory extraction start: user_id=%s message=%s", user_id, _log_repr(message))
-    memory_bridge.update_memory(message, user_id)
+    try:
+        memory_bridge.update_memory(message, user_id)
+    except RateLimitError:
+        logger.warning("background memory extraction: GigaChat rate limit hit for user_id=%s", user_id)
+        return
+    except GigaChatException:
+        logger.exception("background memory extraction: GigaChat request failed for user_id=%s", user_id)
+        return
     logger.info("background memory extraction done: user_id=%s", user_id)

@@ -175,8 +175,210 @@ def get_qwen_model():
     return get_qwen()
 
 
-def update_memory(text: str, user_id: str) -> None:
-    get_memory_system().update(text, user_id)
+def update_memory(text: str, user_id: str, source: "Source | None" = None) -> None:
+    """`source` (memory/models.py's Source — type/id/title/created_at)
+    identifies where `text` came from and when the underlying event
+    happened, for bulk-ingested data (email/telegram/calendar) that isn't
+    something the user just typed in chat right now. Plain chat messages
+    (the only caller before ingest_email() below existed) omit it and get
+    the extractor's default bare "text" source, unchanged from before."""
+    get_memory_system().update(text, user_id, source=source)
+
+
+def ingest_email(user_id: str, email: dict[str, Any]) -> None:
+    """Feed one email record (emails_mock_teamlead.jsonl's schema: id,
+    date, subject, body, from/to as [{name, email}, ...]) through the same
+    extraction pipeline as a live chat message, tagged with a real
+    source=email and the email's own date — see update_memory()'s
+    docstring and memory_updater.py's valid_from handling for why that
+    matters. Framed as "incoming email" text (not first-person) since
+    that's what it actually is; the extractor still resolves facts to the
+    named recipient via the subject/body's own "Мария"/"ваша" wording."""
+    from datetime import datetime
+
+    from models import Source
+
+    date_str = email.get("date")
+    try:
+        event_date = datetime.fromisoformat(date_str) if date_str else None
+    except ValueError:
+        event_date = None
+
+    sender = (email.get("from") or [{}])[0]
+    sender_label = f"{sender.get('name', '')} <{sender.get('email', '')}>".strip()
+    subject = email.get("subject", "")
+    body = email.get("body", "")
+
+    if str(email.get("folder") or "").upper() == "SENT":
+        recipients = ", ".join(
+            f"{p.get('name', '')} <{p.get('email', '')}>".strip() for p in email.get("to") or [] if isinstance(p, dict)
+        )
+        text = f"Исходящее письмо, написанное самим пользователем, кому: {recipients}. Тема: {subject}\n\n{body}"
+    else:
+        text = f"Входящее письмо от {sender_label}. Тема: {subject}\n\n{body}"
+
+    source = Source(
+        type="email",
+        id=str(email.get("id", "")),
+        title=subject,
+        created_at=event_date,
+    )
+
+    update_memory(text, user_id, source=source)
+
+
+def ingest_telegram_message(user_id: str, message: dict[str, Any]) -> None:
+    """Feed one Telegram message (telegram_mock_teamlead.jsonl's schema:
+    chat, msg_id, date, sender, out, text, reply_to, media, forwarded,
+    edited, service) through the extraction pipeline, same idea as
+    ingest_email() above. Returns without doing anything for a message with
+    no text (a pure media/service entry) — there's nothing for the
+    extractor to read a fact out of."""
+    from datetime import datetime
+
+    from models import Source
+
+    if message.get("messages"):
+        _ingest_telegram_chunk(user_id, message)
+        return
+
+    text = (message.get("text") or "").strip()
+    if not text:
+        return
+
+    date_str = message.get("date")
+    try:
+        event_date = datetime.fromisoformat(date_str) if date_str else None
+    except ValueError:
+        event_date = None
+
+    chat = message.get("chat", "")
+    sender = message.get("sender", "")
+    direction = "Исходящее" if message.get("out") else "Входящее"
+    body = f"{direction} сообщение в Telegram (чат «{chat}»), от {sender}: {text}"
+
+    source = Source(
+        type="telegram",
+        id=str(message.get("msg_id", "")),
+        title=chat,
+        created_at=event_date,
+    )
+
+    update_memory(body, user_id, source=source)
+
+
+def _ingest_telegram_chunk(user_id: str, chunk: dict[str, Any]) -> None:
+    """A conversation window from personal_data._conversation_chunks: the
+    whole exchange goes through extraction at once, so short replies keep
+    their context and facts are attributed to the right speaker."""
+    from datetime import datetime
+
+    from models import Source
+
+    try:
+        started = datetime.fromisoformat(chunk["date"]) if chunk.get("date") else None
+    except ValueError:
+        started = None
+    lines = [
+        f"{m['sender']}{' (пользователь)' if m.get('out') else ''}: {m['text']}"
+        for m in chunk["messages"] if m.get("text")
+    ]
+    if not lines:
+        return
+    when = started.strftime("%d.%m.%Y") if started else "дата неизвестна"
+    text = (
+        f"Переписка в Telegram, чат «{chunk['chat']}», {when}. Реплики с пометкой «(пользователь)» написал сам "
+        f"пользователь, остальные — его собеседники:\n" + "\n".join(lines)
+    )
+    update_memory(
+        text,
+        user_id,
+        source=Source(type="telegram", id=f"{chunk['chat']}:{chunk['msg_id']}", title=chunk["chat"], created_at=started),
+    )
+
+
+def ingest_calendar_event(user_id: str, event: dict[str, Any]) -> None:
+    """Feed one Google Calendar event resource (google_calendar_mock.jsonl's
+    schema — the same shape the real Calendar API returns: id, summary,
+    description, start/end as {date} or {dateTime}, attendees, location,
+    organizer/creator) through the extraction pipeline, same idea as
+    ingest_email() above."""
+    from datetime import datetime
+
+    from models import Source
+
+    start = event.get("start") or {}
+    end = event.get("end") or {}
+    start_str = start.get("dateTime") or start.get("date")
+    end_str = end.get("dateTime") or end.get("date")
+
+    try:
+        event_date = datetime.fromisoformat(start_str) if start_str else None
+    except ValueError:
+        event_date = None
+
+    try:
+        event_end = datetime.fromisoformat(end_str) if end_str else None
+    except ValueError:
+        event_end = None
+
+    summary = event.get("summary", "(без названия)")
+    description = event.get("description") or ""
+    location = event.get("location")
+    attendees = event.get("attendees") or []
+    attendee_names = ", ".join(a.get("displayName") or a.get("email", "") for a in attendees)
+
+    parts = [f"Событие в календаре: «{summary}»."]
+    if start_str:
+        parts.append(f"Начало: {start_str}" + (f", окончание: {end_str}" if end_str else "") + ".")
+    if location:
+        parts.append(f"Место: {location}.")
+    if attendee_names:
+        parts.append(f"Участники: {attendee_names}.")
+    if description:
+        parts.append(f"Описание: {description}")
+    text = " ".join(parts)
+
+    source = Source(
+        type="calendar",
+        id=str(event.get("id", "")),
+        title=summary,
+        created_at=event_date,
+        end_at=event_end,
+    )
+
+    update_memory(text, user_id, source=source)
+
+
+_INGEST_BY_SOURCE = {
+    "email": ingest_email,
+    "telegram": ingest_telegram_message,
+    "calendar": ingest_calendar_event,
+}
+
+
+def import_records(user_id: str, source: str, records: list[dict[str, Any]]) -> dict[str, Any]:
+    """Bulk entry point for the Data Import panel (see main.py's
+    POST /api/import): run every record in `records` through the ingest_*
+    function for `source`, one memory-extraction call per record. A single
+    malformed record is logged and skipped rather than failing the whole
+    batch — with dozens/hundreds of records in a real export, one bad line
+    shouldn't lose everything after it."""
+    ingest = _INGEST_BY_SOURCE.get(source)
+    if ingest is None:
+        raise ValueError(f"Unknown import source: {source!r}")
+
+    imported = 0
+    errors: list[str] = []
+    for i, record in enumerate(records):
+        try:
+            ingest(user_id, record)
+            imported += 1
+        except Exception as exc:  # noqa: BLE001 — one bad record must not sink the batch
+            logger.exception("import_records: user_id=%s source=%s record[%d] failed", user_id, source, i)
+            errors.append(f"record {i}: {exc}")
+
+    return {"imported": imported, "failed": len(errors), "errors": errors}
 
 
 def handmade_memory(
@@ -212,7 +414,7 @@ def handmade_memory(
     }
 
 
-def retrieve_memory_context(query: str, user_id: str, top_k: int = 5) -> str:
+def retrieve_memory_context(query: str, user_id: str, top_k: int = 20) -> str:
     system = get_memory_system()
     hits = system.retrieve(query, user_id, top_k)
     context = system.context_formatter.format(
@@ -245,8 +447,26 @@ def delete_memory(memory_id: str, user_id: str) -> None:
     if memory.user_id != user_id:
         raise ValueError("Memory does not belong to the specified user.")
 
+    index_manager = _get_lightweight_index_manager()  # before the delete, so its startup sync check can't trigger a rebuild
     repo.delete(memory_id)
-    _get_lightweight_index_manager().rebuild()
+    index_manager.remove([memory_id])
+
+
+def delete_all_memories(user_id: str) -> int:
+    """Delete every memory this user has, for the account-wide "forget me"
+    reset — see main.py's DELETE /api/account/data. Same dual-path choice
+    as delete_memory() above (route through the loaded full system if one
+    exists, otherwise a lightweight repository + index rebuild)."""
+    logger.info("delete_all_memories: user_id=%s", user_id)
+    if _system is not None:
+        return _system.delete_all(user_id)
+
+    repo = _get_repository()
+    index_manager = _get_lightweight_index_manager()
+    ids = [m.id for m in repo.find_by_user(user_id=user_id, active_only=False)]
+    count = repo.delete_by_user(user_id)
+    index_manager.remove(ids)
+    return count
 
 
 def search_memories(query: str, user_id: str, top_k: int = 5) -> list[dict[str, Any]]:
@@ -263,16 +483,7 @@ def search_memories(query: str, user_id: str, top_k: int = 5) -> list[dict[str, 
         [(h.memory.type.value, h.memory.content, round(h.reranker_score, 3)) for h in hits],
     )
     return [
-        {
-            "id": hit.memory.id,
-            "type": hit.memory.type.value,
-            "content": hit.memory.content,
-            "confidence": hit.memory.confidence,
-            "importance": hit.memory.importance,
-            "status": hit.memory.status.value,
-            "created_at": hit.memory.created_at.isoformat() if hit.memory.created_at else "",
-            "relevance": hit.reranker_score,
-        }
+        {**_memory_to_dict(hit.memory), "relevance": hit.reranker_score}
         for hit in hits
     ]
 
@@ -299,21 +510,77 @@ def force_dream(user_id: str) -> dict[str, Any]:
     return result
 
 
+PROFILE_BUILDER_TAG = "profile_builder"
+
+
+def replace_profile_facts(user_id: str, facts: list[dict[str, Any]]) -> int:
+    """Swap the user's previously generated profile facts for `facts`
+    (each: content, type, sources [Source], valid_from, valid_until,
+    confidence, dimension). A rebuild therefore never duplicates facts."""
+    from models import MemoryType
+
+    system = get_memory_system()
+    stale = [m.id for m in system.get_all(user_id) if (m.metadata or {}).get("generated_by") == PROFILE_BUILDER_TAG]
+    for memory_id in stale:
+        system.repository.delete(memory_id)
+    system.index_manager.remove(stale)
+
+    for fact in facts:
+        system.add_memory(
+            content=fact["content"],
+            user_id=user_id,
+            memory_type=MemoryType(fact.get("type", "fact")),
+            confidence=fact.get("confidence", 0.9),
+            importance=fact.get("importance", 0.8),
+            sources=fact.get("sources") or [],
+            valid_from=fact.get("valid_from"),
+            valid_until=fact.get("valid_until"),
+            metadata={
+                "generated_by": PROFILE_BUILDER_TAG,
+                "profile_dimension": fact.get("dimension"),
+                "subject": "user",
+                "subject_is_user": True,
+                "subject_evidence": "profile_builder",
+            },
+        )
+    logger.info("replace_profile_facts: user_id=%s facts=%d", user_id, len(facts))
+    return len(facts)
+
+
 def list_memories(user_id: str) -> list[dict[str, Any]]:
     memories = _get_repository().find_by_user(
         user_id=user_id,
         active_only=True,
     )
 
-    return [
-        {
-            "id": m.id,
-            "type": m.type.value,
-            "content": m.content,
-            "confidence": m.confidence,
-            "importance": m.importance,
-            "status": m.status.value,
-            "created_at": m.created_at.isoformat() if m.created_at else "",
-        }
-        for m in memories
-    ]
+    return [_memory_to_dict(m) for m in memories]
+
+
+def _memory_to_dict(m: Any) -> dict[str, Any]:
+    """Shared Memory -> API dict shape for list_memories/search_memories.
+
+    Case criterion "источник и период действия": sources[i].type is the
+    origin (email/telegram/calendar/text=chat), sources[i].created_at
+    there is the ORIGINAL event date; valid_from/valid_until is this
+    fact's own validity period. See update_memory()/ingest_email()'s
+    docstrings for how these get populated."""
+    return {
+        "id": m.id,
+        "type": m.type.value,
+        "content": m.content,
+        "confidence": m.confidence,
+        "importance": m.importance,
+        "status": m.status.value,
+        "created_at": m.created_at.isoformat() if m.created_at else "",
+        "sources": [
+            {
+                "type": s.type,
+                "id": s.id,
+                "title": s.title,
+                "created_at": s.created_at.isoformat() if s.created_at else None,
+            }
+            for s in m.sources
+        ],
+        "valid_from": m.valid_from.isoformat() if m.valid_from else None,
+        "valid_until": m.valid_until.isoformat() if m.valid_until else None,
+    }

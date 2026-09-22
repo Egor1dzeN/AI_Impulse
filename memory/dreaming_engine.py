@@ -1259,10 +1259,17 @@ status=запланирован есть в более новой memory, ито
             memories
         )
 
+        # A merge operation's "content" is the full concatenated text of
+        # everything it's folding together, plus its archive_ids list — with
+        # enough accumulated memories this easily runs past 1024 tokens and
+        # gets cut off mid-string, producing unparseable truncated JSON
+        # (observed crashing a real email-ingestion run). 3072 gives enough
+        # headroom for a handful of sizeable merges without ballooning
+        # every dreaming call's cost when there's nothing to merge.
         response = self.qwen.generate(
             system_prompt=self.SYSTEM_PROMPT,
             user_prompt=prompt,
-            max_new_tokens=1024,
+            max_new_tokens=3072,
         )
 
         data = self._parse_response(

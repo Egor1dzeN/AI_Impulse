@@ -24,3 +24,7 @@ bcrypt==4.0.1
 google-auth
 requests
 imageio-ffmpeg
+ddgs
+tzdata
+python-dateutil
+pypdf

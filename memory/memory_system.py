@@ -21,7 +21,7 @@ from memory_updater import MemoryUpdater
 from persistent_memory_store import PersistentMemoryStore
 from retrieval_model_manager import RetrievalModelManager
 from cheap_memory_router import CheapMemoryRouter
-from models import Memory, MemoryStatus, MemoryType
+from models import Memory, MemoryStatus, MemoryType, Source
 
 logger = logging.getLogger(__name__)
 
@@ -112,8 +112,14 @@ class MemorySystem:
     # PUBLIC API
     # =========================================================
 
-    def update(self, text: str, user_id: str):
-        """Process a message and trigger Dreaming when threshold is reached."""
+    def update(self, text: str, user_id: str, source: Source | None = None):
+        """Process a message and trigger Dreaming when threshold is reached.
+
+        `source` identifies where `text` came from (email/telegram/
+        calendar/... or the default plain-chat text) so extracted facts
+        record a real source and validity period instead of always looking
+        like something the user just said in chat right now — see
+        enricher.py::process's docstring for how this threads down."""
         route = self.cheap_memory_router.route(text)
 
         if route.value == "skip":
@@ -127,6 +133,7 @@ class MemorySystem:
         result = self.pipeline.process(
             text=text,
             user_id=user_id,
+            source=source,
         )
 
         logger.info(
@@ -185,12 +192,27 @@ class MemorySystem:
                 f"threshold={self.dreaming_engine.every_n_memories}"
             )
 
-            dream_result = (
-                self.dreaming_engine.notify_memory_changes(
-                    user_id=user_id,
-                    count=changed_count,
+            # Consolidation is a best-effort cleanup pass on top of memory
+            # already saved above (pipeline.process + sync_after_pipeline
+            # already ran) — a malformed/truncated LLM response here (seen
+            # in practice: a big merge's JSON cut off by max_new_tokens)
+            # must not make this whole update() call look like it failed
+            # and lose the fact that WAS just successfully extracted and
+            # stored. Skip this round of Dreaming and let it try again next
+            # time enough changes accumulate.
+            try:
+                dream_result = (
+                    self.dreaming_engine.notify_memory_changes(
+                        user_id=user_id,
+                        count=changed_count,
+                    )
                 )
-            )
+            except Exception:
+                logger.exception(
+                    "Dreaming consolidation failed for user_id=%s — new memory was still saved",
+                    user_id,
+                )
+                dream_result = None
 
             print(
                 f"[DREAMING DEBUG] "
@@ -219,6 +241,10 @@ class MemorySystem:
         confidence: float = 1.0,
         importance: float = 1.0,
         freshness: float = 1.0,
+        sources: list[Source] | None = None,
+        valid_from: datetime | None = None,
+        valid_until: datetime | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> Memory:
         """Immediately add a manually created memory.
 
@@ -246,11 +272,11 @@ class MemorySystem:
             importance=importance,
             freshness=freshness,
             status=MemoryStatus.ACTIVE,
-            sources=[],
+            sources=list(sources or []),
             created_at=now,
             updated_at=now,
-            valid_from=now,
-            valid_until=None,
+            valid_from=valid_from or now,
+            valid_until=valid_until,
             metadata={
                 "manual": True,
                 "subject": None,
@@ -264,6 +290,7 @@ class MemorySystem:
                 "semantic_scope": None,
                 "semantic_relations": [],
                 "source_text": content,
+                **(metadata or {}),
             },
         )
 
@@ -336,7 +363,16 @@ class MemorySystem:
             )
 
         self.repository.delete(memory_id)
-        self.index_manager.rebuild()
+        self.index_manager.remove([memory_id])
+
+    def delete_all(self, user_id: str) -> int:
+        """Delete every memory belonging to the specified user. Returns the
+        number of memories removed."""
+
+        ids = [m.id for m in self.repository.find_by_user(user_id=user_id, active_only=False)]
+        count = self.repository.delete_by_user(user_id)
+        self.index_manager.remove(ids)
+        return count
 
     # =========================================================
     # DREAMING

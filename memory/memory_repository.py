@@ -108,7 +108,7 @@ class MemoryRepository:
 
             field = next(field for field in fields(Source) if field.name == key)
 
-            if value is not None and field.name == "created_at":
+            if value is not None and field.name in ("created_at", "end_at"):
                 try:
                     value = datetime.fromisoformat(value)
                 except (TypeError, ValueError):
@@ -266,6 +266,15 @@ class MemoryRepository:
 
         if cursor.rowcount == 0:
             raise ValueError(f"Memory with id '{memory_id}' does not exist.")
+
+    def delete_by_user(self, user_id: str) -> int:
+        with self._lock:
+            cursor = self._connection.execute(
+                "DELETE FROM memories WHERE user_id = ?",
+                (user_id,),
+            )
+            self._connection.commit()
+        return cursor.rowcount
 
     def clear(self) -> None:
         with self._lock:

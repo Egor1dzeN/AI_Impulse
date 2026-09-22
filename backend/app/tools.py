@@ -16,6 +16,8 @@ from pydantic import BaseModel, Field
 from . import db, gmail, google_calendar, memory_bridge, user_settings
 
 MEMORY_TOOL_NAME = "search_memory"
+LIST_MEMORIES_TOOL_NAME = "list_memories"
+MEMORY_TOOL_NAMES = {MEMORY_TOOL_NAME, LIST_MEMORIES_TOOL_NAME}
 
 # ============================================================
 # TOPIC 1 — CALENDAR & TASKS
@@ -33,28 +35,76 @@ def create_task_impl(user_id: str, title: str, due_date: str | None = None, note
     return {"id": row_id, "title": title, "due_date": due_date, "notes": notes}
 
 
-def create_calendar_event_impl(
-    refresh_token: str, title: str, start_time: str, duration_minutes: int = 30, notes: str | None = None
-) -> dict[str, Any]:
-    """Create a real event (with a popup reminder) on the user's own Google
-    Calendar — unlike create_task_impl above, which only writes to this
-    app's internal tasks table. See google_calendar.py for the OAuth/API
-    details; ToolNode(handle_tool_errors=True) in agent_graph.py turns any
-    exception here (revoked access, a malformed start_time, ...) into a
-    ToolMessage the model can relay to the user instead of crashing the turn."""
-    return google_calendar.create_event(
-        refresh_token=refresh_token,
-        summary=title,
-        start_iso=start_time,
-        duration_minutes=duration_minutes,
-        description=notes,
-    )
+# Same asymmetric shape as TOPIC 1b's email tools below: creating,
+# editing or deleting a REAL Google Calendar event is visible to a third
+# party (invitees) or simply hard to undo, so none of the three agent
+# tools below call the Calendar API directly. Each only packages the
+# proposed change into a draft_id'd dict and hands it to the frontend as
+# an artifact card with Confirm/Cancel — the actual create_event/
+# update_event/delete_event call happens exclusively in main.py's
+# POST /api/calendar/confirm, triggered by that button, never by the
+# agent's own tool-calling loop. See google_calendar.action_already_done()
+# for why a repeat click of an old card is a safe no-op.
+
+
+def draft_calendar_event_impl(title: str, start_time: str, duration_minutes: int = 30, notes: str | None = None) -> dict[str, Any]:
+    return {
+        "draft_id": db.new_id(),
+        "kind": "create",
+        "title": title,
+        "start_time": start_time,
+        "duration_minutes": duration_minutes,
+        "notes": notes,
+    }
 
 
 def list_calendar_events_impl(refresh_token: str, date: str, days: int = 1) -> dict[str, Any]:
-    """Read events from the user's own Google Calendar — the read-side
-    counterpart to create_calendar_event_impl above."""
+    """Read events from the user's own Google Calendar — the only calendar
+    tool that still executes directly, since reading isn't destructive and
+    needs no confirmation card."""
     return {"events": google_calendar.list_events(refresh_token=refresh_token, date=date, days=days)}
+
+
+def draft_update_calendar_event_impl(
+    event_id: str,
+    title: str | None = None,
+    start_time: str | None = None,
+    duration_minutes: int | None = None,
+    notes: str | None = None,
+) -> dict[str, Any]:
+    return {
+        "draft_id": db.new_id(),
+        "kind": "update",
+        "event_id": event_id,
+        "title": title,
+        "start_time": start_time,
+        "duration_minutes": duration_minutes,
+        "notes": notes,
+    }
+
+
+def draft_delete_calendar_events_impl(event_ids: list[str], summaries: list[str], start_times: list[str]) -> dict[str, Any]:
+    """One or more events at once (e.g. "удали все встречи сегодня") — the
+    three lists are positional (event_ids[i]/summaries[i]/start_times[i]
+    describe the same event), since a list of plain strings round-trips
+    through GigaChat's tool-calling far more reliably than a list of
+    nested objects (see RouteLocation's _coerce_route_location for the
+    same lesson learned elsewhere in this file).
+
+    Each event gets its OWN draft_id, not one shared for the whole batch
+    — the frontend card confirms them individually (so one failing, e.g.
+    an already-deleted event, doesn't block the rest), each still hitting
+    the same idempotency guard as a lone delete. summary/start_time are
+    carried through purely for display; main.py's confirm endpoint
+    ignores them and deletes by event_id alone."""
+    return {
+        "draft_id": db.new_id(),
+        "kind": "delete",
+        "events": [
+            {"draft_id": db.new_id(), "event_id": event_id, "summary": summary, "start_time": start_time}
+            for event_id, summary, start_time in zip(event_ids, summaries, start_times)
+        ],
+    }
 
 
 # ============================================================
@@ -100,36 +150,103 @@ def list_tasks_impl(user_id: str) -> dict[str, Any]:
 # ============================================================
 
 
-def add_expense_impl(user_id: str, amount: float, category: str, date: str, note: str | None = None) -> dict[str, Any]:
+def add_transaction_impl(
+    user_id: str, amount: float, kind: str, category: str, date: str, note: str | None = None
+) -> dict[str, Any]:
     row_id = db.new_id()
     with db.get_conn() as conn:
         conn.execute(
-            "INSERT INTO expenses (id, user_id, amount, category, note, date, created_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
-            (row_id, user_id, amount, category, note, date, db.now_iso()),
+            "INSERT INTO expenses (id, user_id, amount, type, category, note, date, created_at) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+            (row_id, user_id, amount, kind, category, note, date, db.now_iso()),
         )
-    return {"id": row_id, "amount": amount, "category": category, "date": date}
+    return {"id": row_id, "amount": amount, "type": kind, "category": category, "date": date, "note": note}
 
 
-def get_expense_summary_impl(user_id: str) -> dict[str, Any]:
+def add_expense_impl(user_id: str, amount: float, category: str, date: str, note: str | None = None) -> dict[str, Any]:
+    return add_transaction_impl(user_id=user_id, amount=amount, kind="expense", category=category, date=date, note=note)
+
+
+def add_income_impl(user_id: str, amount: float, category: str, date: str, note: str | None = None) -> dict[str, Any]:
+    return add_transaction_impl(user_id=user_id, amount=amount, kind="income", category=category, date=date, note=note)
+
+
+def update_transaction_impl(
+    user_id: str,
+    transaction_id: str,
+    amount: float | None = None,
+    category: str | None = None,
+    date: str | None = None,
+    note: str | None = None,
+) -> dict[str, Any]:
+    with db.get_conn() as conn:
+        row = conn.execute(
+            "SELECT id, amount, type, category, note, date FROM expenses WHERE id = ? AND user_id = ?",
+            (transaction_id, user_id),
+        ).fetchone()
+        if row is None:
+            return {"found": False}
+
+        updated = dict(row)
+        if amount is not None:
+            updated["amount"] = amount
+        if category is not None:
+            updated["category"] = category
+        if date is not None:
+            updated["date"] = date
+        if note is not None:
+            updated["note"] = note
+
+        conn.execute(
+            "UPDATE expenses SET amount = ?, category = ?, date = ?, note = ? WHERE id = ? AND user_id = ?",
+            (updated["amount"], updated["category"], updated["date"], updated["note"], transaction_id, user_id),
+        )
+
+    return {"found": True, **updated}
+
+
+def list_transactions_impl(user_id: str, limit: int = 30) -> dict[str, Any]:
     with db.get_conn() as conn:
         rows = conn.execute(
-            "SELECT amount, category, date FROM expenses WHERE user_id = ?",
+            "SELECT id, amount, type, category, note, date, created_at FROM expenses "
+            "WHERE user_id = ? ORDER BY date DESC, created_at DESC LIMIT ?",
+            (user_id, limit),
+        ).fetchall()
+    return {"transactions": [dict(row) for row in rows]}
+
+
+def get_finance_summary_impl(user_id: str) -> dict[str, Any]:
+    with db.get_conn() as conn:
+        rows = conn.execute(
+            "SELECT amount, type, category, date FROM expenses WHERE user_id = ?",
             (user_id,),
         ).fetchall()
 
-    by_month: dict[str, float] = defaultdict(float)
-    by_category: dict[str, float] = defaultdict(float)
+    by_month: dict[str, dict[str, float]] = defaultdict(lambda: {"expense": 0.0, "income": 0.0})
+    expense_by_category: dict[str, float] = defaultdict(float)
+    income_by_category: dict[str, float] = defaultdict(float)
+    total_expense = 0.0
+    total_income = 0.0
 
     for row in rows:
         month = str(row["date"])[:7]
-        by_month[month] += float(row["amount"])
-        by_category[row["category"]] += float(row["amount"])
+        amount = float(row["amount"])
+        if row["type"] == "income":
+            by_month[month]["income"] += amount
+            income_by_category[row["category"]] += amount
+            total_income += amount
+        else:
+            by_month[month]["expense"] += amount
+            expense_by_category[row["category"]] += amount
+            total_expense += amount
 
     return {
-        "total": sum(by_month.values()),
+        "total_expense": total_expense,
+        "total_income": total_income,
+        "balance": total_income - total_expense,
         "by_month": dict(sorted(by_month.items())),
-        "by_category": dict(sorted(by_category.items(), key=lambda kv: -kv[1])),
+        "expense_by_category": dict(sorted(expense_by_category.items(), key=lambda kv: -kv[1])),
+        "income_by_category": dict(sorted(income_by_category.items(), key=lambda kv: -kv[1])),
     }
 
 
@@ -196,6 +313,96 @@ def get_health_summary_impl(user_id: str) -> dict[str, Any]:
         "kcal_by_day": dict(sorted(by_day.items())),
         "weight_history": [dict(row) for row in weight_rows],
     }
+
+
+OPEN_FOOD_FACTS_URL = "https://world.openfoodfacts.org/api/v2/product/{barcode}.json"
+OPEN_FOOD_FACTS_USER_AGENT = "ImpulseAssistant/1.0 (personal project; contact via GitHub)"
+
+
+def get_product_info_impl(barcode: str) -> dict[str, Any]:
+    """Look up a packaged food product by its barcode (EAN/UPC) via Open
+    Food Facts — a free, keyless, crowdsourced product database. Returns
+    per-100g macros so the result can feed straight into log_meal_impl
+    once the model knows how much of it the user actually ate."""
+    barcode = barcode.strip()
+
+    resp = requests.get(
+        OPEN_FOOD_FACTS_URL.format(barcode=barcode),
+        params={"fields": "product_name,brands,quantity,categories,nutriscore_grade,nutriments"},
+        headers={"User-Agent": OPEN_FOOD_FACTS_USER_AGENT},
+        timeout=8,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    # status == 0 means "no such barcode in the database", not an HTTP
+    # error — Open Food Facts still returns 200 for it.
+    if data.get("status") != 1:
+        return {"found": False, "barcode": barcode}
+
+    product = data.get("product") or {}
+    nutriments = product.get("nutriments") or {}
+
+    return {
+        "found": True,
+        "barcode": barcode,
+        "name": product.get("product_name") or None,
+        "brand": product.get("brands") or None,
+        "quantity": product.get("quantity") or None,
+        "categories": product.get("categories") or None,
+        "nutriscore": product.get("nutriscore_grade") or None,
+        "kcal_100g": nutriments.get("energy-kcal_100g"),
+        "protein_100g": nutriments.get("proteins_100g"),
+        "fat_100g": nutriments.get("fat_100g"),
+        "carbs_100g": nutriments.get("carbohydrates_100g"),
+    }
+
+
+OPEN_FOOD_FACTS_SEARCH_URL = "https://search.openfoodfacts.org/search"
+
+
+def search_product_impl(query: str, page_size: int = 5) -> dict[str, Any]:
+    """Free-text product search on Open Food Facts (its old cgi/search.pl
+    is retired — this hits the new search-a-licious endpoint instead),
+    for when the user names a product instead of reading out a barcode.
+    It's a crowdsourced, deduplicated-by-nobody database, so a common name
+    like "nutella" returns many near-duplicate entries — the caller (the
+    model) is expected to pick the best match itself or, if that's
+    ambiguous, show a short list and ask the user rather than guessing."""
+    query = query.strip()
+
+    resp = requests.get(
+        OPEN_FOOD_FACTS_SEARCH_URL,
+        params={
+            "q": query,
+            "page_size": page_size,
+            "fields": "code,product_name,brands,quantity,nutrition_grades,nutriments",
+        },
+        headers={"User-Agent": OPEN_FOOD_FACTS_USER_AGENT},
+        timeout=8,
+    )
+    resp.raise_for_status()
+    data = resp.json()
+
+    results = []
+    for hit in data.get("hits", []):
+        nutriments = hit.get("nutriments") or {}
+        brands = hit.get("brands")
+        results.append(
+            {
+                "barcode": hit.get("code"),
+                "name": hit.get("product_name") or None,
+                "brand": ", ".join(brands) if isinstance(brands, list) else brands,
+                "quantity": hit.get("quantity") or None,
+                "nutriscore": hit.get("nutrition_grades") or None,
+                "kcal_100g": nutriments.get("energy-kcal_100g"),
+                "protein_100g": nutriments.get("proteins_100g"),
+                "fat_100g": nutriments.get("fat_100g"),
+                "carbs_100g": nutriments.get("carbohydrates_100g"),
+            }
+        )
+
+    return {"found": bool(results), "query": query, "results": results}
 
 
 # ============================================================
@@ -724,14 +931,23 @@ CBR_DAILY_URL = "https://www.cbr.ru/scripts/XML_daily.asp"
 CBR_USER_AGENT = "ImpulseAssistant/1.0 (personal project; contact via GitHub)"
 
 
-def get_exchange_rate_impl(currency: str) -> dict[str, Any]:
-    """Today's official CBR (Central Bank of Russia) rate for `currency` vs
-    RUB. No date param exposed to the LLM on purpose — always the latest
-    published rate, one less argument for a small model to get wrong."""
+def get_exchange_rate_impl(currency: str, on_date: str | None = None) -> dict[str, Any]:
+    """Official CBR (Central Bank of Russia) rate for `currency` vs RUB.
+    on_date (YYYY-MM-DD) is optional and defaults to the latest published
+    rate — CBR's XML_daily.asp itself defaults to "today" (actually the
+    latest business day) when date_req is omitted, and for a past date
+    that fell on a weekend/holiday it transparently returns the rate that
+    was in effect that day (the one fixed the preceding business day),
+    same as the site itself does — no retry/lookback needed here."""
     currency = currency.strip().upper()
+
+    params = {}
+    if on_date:
+        params["date_req"] = date.fromisoformat(on_date).strftime("%d/%m/%Y")
 
     resp = requests.get(
         CBR_DAILY_URL,
+        params=params,
         headers={"User-Agent": CBR_USER_AGENT},
         timeout=8,
     )
@@ -758,12 +974,42 @@ def get_exchange_rate_impl(currency: str) -> dict[str, Any]:
     return {"found": False, "currency": currency, "date": rate_date}
 
 
+def get_exchange_rate_history_impl(currency: str, days_ago: int = 7) -> dict[str, Any]:
+    """Compare today's CBR rate for `currency` against its rate `days_ago`
+    days back (default 7 — "за неделю"). Exists so a weekly/period
+    comparison is ONE tool call instead of the model having to invent a
+    past date, call get_exchange_rate twice and subtract itself — that
+    multi-step plan is exactly what was observed blowing the small model's
+    step budget (LangGraph recursion limit) on "курс $/¥ за неделю"."""
+    currency = currency.strip().upper()
+    current = get_exchange_rate_impl(currency)
+    past_date = (date.today() - timedelta(days=days_ago)).isoformat()
+    past = get_exchange_rate_impl(currency, on_date=past_date)
+
+    if not current["found"] or not past["found"]:
+        return {"found": False, "currency": currency}
+
+    change_rub = current["value_rub"] - past["value_rub"]
+    change_pct = (change_rub / past["value_rub"] * 100) if past["value_rub"] else None
+
+    return {
+        "found": True,
+        "currency": current["currency"],
+        "name": current["name"],
+        "nominal": current["nominal"],
+        "current": {"value_rub": current["value_rub"], "date": current["date"]},
+        "past": {"value_rub": past["value_rub"], "date": past["date"]},
+        "change_rub": change_rub,
+        "change_pct": change_pct,
+    }
+
+
 # ============================================================
 # LANGCHAIN TOOLS — bound to one user_id, handed to the LangGraph agent
 # ============================================================
 #
 # Each request builds its own tool instances (via build_action_tools /
-# build_memory_tool) closed over that request's user_id, since the raw
+# build_memory_tools) closed over that request's user_id, since the raw
 # functions above are keyed by user but the LLM must never see or fill in
 # user_id itself. MCP-provided tools are plain LangChain BaseTool instances
 # too, so agent_graph.py can merge them into the same flat list this module
@@ -785,13 +1031,36 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
 
     @tool
     def add_expense(amount: float, category: str, date: str, note: str | None = None) -> dict:
-        """Записать трату. Действие на запись. date — YYYY-MM-DD, используй сегодняшнюю дату, если пользователь не указал."""
+        """Записать трату (расход). Действие на запись. date — YYYY-MM-DD, используй сегодняшнюю дату, если пользователь не указал."""
         return add_expense_impl(user_id=user_id, amount=amount, category=category, date=date, note=note)
 
     @tool
-    def get_expense_summary() -> dict:
-        """Получить сводку трат по категориям и месяцам."""
-        return get_expense_summary_impl(user_id=user_id)
+    def add_income(amount: float, category: str, date: str, note: str | None = None) -> dict:
+        """Записать пополнение/доход (зарплата, подарок, возврат денег и т.п.) — противоположность add_expense. Действие на запись. date — YYYY-MM-DD, используй сегодняшнюю дату, если пользователь не указал."""
+        return add_income_impl(user_id=user_id, amount=amount, category=category, date=date, note=note)
+
+    @tool
+    def list_transactions() -> dict:
+        """Показать последние записи по тратам и пополнениям (с их id). Вызывай перед update_transaction, чтобы найти id нужной записи, если он не известен из более раннего вызова в этом разговоре."""
+        return list_transactions_impl(user_id=user_id)
+
+    @tool
+    def update_transaction(
+        transaction_id: str,
+        amount: float | None = None,
+        category: str | None = None,
+        date: str | None = None,
+        note: str | None = None,
+    ) -> dict:
+        """Изменить существующую запись о трате/пополнении (сумму, категорию, дату или заметку) по её id. Действие на запись. transaction_id бери из list_transactions или из результата предыдущего add_expense/add_income в этом разговоре — никогда не придумывай id сам. Заполняй только те поля, которые нужно изменить, остальные оставь пустыми (None) — они не изменятся. Если found=false — записи с таким id не существует, сообщи об этом пользователю."""
+        return update_transaction_impl(
+            user_id=user_id, transaction_id=transaction_id, amount=amount, category=category, date=date, note=note
+        )
+
+    @tool
+    def get_finance_summary() -> dict:
+        """Получить сводку по тратам и пополнениям: итоги, баланс (пополнения минус траты), разбивка по месяцам и категориям."""
+        return get_finance_summary_impl(user_id=user_id)
 
     @tool
     def log_meal(
@@ -816,6 +1085,16 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
     def get_health_summary() -> dict:
         """Получить сводку по калориям за сегодня и динамике веса."""
         return get_health_summary_impl(user_id=user_id)
+
+    @tool
+    def get_product_info(barcode: str) -> dict:
+        """Найти информацию о продукте по штрихкоду (EAN/UPC) через открытую бесплатную базу Open Food Facts — название, бренд, КБЖУ на 100 г. Вызывай ТОЛЬКО когда пользователь явно называет штрихкод (набор цифр) и просит узнать/проверить продукт по нему, например "что за продукт со штрихкодом 4008400301661" или "проверь этот код: ...". Если пользователь называет продукт по НАЗВАНИЮ, а не штрихкодом — используй search_product, а не эту функцию. barcode — цифры штрихкода без пробелов, только то, что назвал пользователь, не выдумывай. Если found=false — такого штрихкода нет в базе, сообщи об этом пользователю, не выдумывай данные о продукте. Если found=true и пользователь просит ЗАПИСАТЬ это как приём пищи — пересчитай kcal_100g/protein_100g/fat_100g/carbs_100g на реально съеденный вес (уточни его у пользователя, если не назван) и вызови log_meal с пересчитанными значениями, а не с показателями на 100 г."""
+        return get_product_info_impl(barcode)
+
+    @tool
+    def search_product(query: str) -> dict:
+        """Найти продукт по НАЗВАНИЮ (не по штрихкоду) через открытую бесплатную базу Open Food Facts — возвращает несколько похожих товаров с их КБЖУ на 100 г. Вызывай, когда пользователь называет продукт словами и просит узнать его КБЖУ/состав ("сколько калорий в сникерсе", "проверь батончик Twix"). query — название продукта на языке, как его назвал пользователь (можно на английском, если так лучше ищется). База пополняется пользователями, поэтому результатов может быть много почти одинаковых — если среди results есть явно наиболее подходящий по названию и бренду вариант, используй его; если неоднозначно (несколько разных продуктов под похожим названием) — покажи пользователю короткий список вариантов (name, brand, kcal_100g) и спроси, какой из них. Если results пуст — сообщи, что не нашёл, не выдумывай данные. Если пользователь просит ЗАПИСАТЬ выбранный продукт как приём пищи — пересчитай КБЖУ на реально съеденный вес (уточни его, если не назван) и вызови log_meal с пересчитанными значениями, а не с показателями на 100 г."""
+        return search_product_impl(query)
 
     intervals_tools: list[BaseTool] = []
     intervals_icu_key = user_settings.get_intervals_icu_key(user_id)
@@ -865,25 +1144,46 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
     calendar_refresh_token = user_settings.get_google_calendar_refresh_token(user_id)
     if calendar_refresh_token:
 
-        @tool
+        @tool(response_format="content_and_artifact")
         def create_calendar_event(
             title: str, start_time: str, duration_minutes: int = 30, notes: str | None = None
-        ) -> dict:
-            """Поставить напоминание/событие в РЕАЛЬНЫЙ Google-календарь пользователя (не путать с create_task — та пишет только во внутренний список задач приложения, без синхронизации с Google). Вызывай ТОЛЬКО когда пользователь явно просит поставить напоминание/событие на конкретное время или дату ("напомни завтра в 9 утра", "поставь встречу в календарь на пятницу в 15:00"). title — короткое название. start_time — ОБЯЗАТЕЛЬНО в формате YYYY-MM-DDTHH:MM:SS по московскому времени (Europe/Moscow), без указания смещения часового пояса — сам разреши относительные даты/время ("завтра", "через час", "в 9 утра") в этот формат, используя сегодняшнюю дату из инструкций. duration_minutes — длительность события в минутах (по умолчанию 30), если пользователь не назвал — не спрашивай, просто оставь по умолчанию. В момент start_time пользователю придёт всплывающее уведомление в Google Calendar."""
-            return create_calendar_event_impl(
-                refresh_token=calendar_refresh_token,
-                title=title,
-                start_time=start_time,
-                duration_minutes=duration_minutes,
-                notes=notes,
-            )
+        ) -> tuple[str, dict]:
+            """Подготовить напоминание/событие для РЕАЛЬНОГО Google-календаря пользователя (не путать с create_task — та пишет только во внутренний список задач приложения, без синхронизации с Google). Вызывай ТОЛЬКО когда пользователь явно просит поставить напоминание/событие на конкретное время или дату ("напомни завтра в 9 утра", "поставь встречу в календарь на пятницу в 15:00"). title — короткое название. start_time — ОБЯЗАТЕЛЬНО в формате YYYY-MM-DDTHH:MM:SS по московскому времени (Europe/Moscow), без указания смещения часового пояса — сам разреши относительные даты/время ("завтра", "через час", "в 9 утра") в этот формат, используя сегодняшнюю дату из инструкций. duration_minutes — длительность события в минутах (по умолчанию 30), если пользователь не назвал — не спрашивай, просто оставь по умолчанию.
+
+ВАЖНО: эта функция НЕ создаёт событие. Она только показывает пользователю карточку с кнопкой «Подтвердить» — событие реально появится в календаре, только когда пользователь сам нажмёт эту кнопку. После вызова НИКОГДА не говори, что событие уже создано или напоминание уже поставлено — просто сообщи, что черновик готов и показан пользователю на подтверждение."""
+            result = draft_calendar_event_impl(title=title, start_time=start_time, duration_minutes=duration_minutes, notes=notes)
+            return "Черновик события подготовлен и показан пользователю для подтверждения.", result
 
         @tool
         def get_calendar_events(date: str, days: int = 1) -> dict:
-            """Посмотреть, что запланировано в РЕАЛЬНОМ Google-календаре пользователя. Вызывай, когда пользователь спрашивает про свои планы/расписание/встречи на конкретный день или период ("что у меня завтра", "какие планы на этой неделе", "что запланировано на пятницу"). date — YYYY-MM-DD, начало периода (переведи "сегодня"/"завтра"/день недели в конкретную дату сам, используя сегодняшнюю дату из инструкций). days — сколько дней подряд просмотреть начиная с date (по умолчанию 1 — только этот день; для "на этой неделе" используй 7). Если events пуст — значит на этот период ничего не запланировано, так и скажи."""
+            """Посмотреть, что запланировано в РЕАЛЬНОМ Google-календаре пользователя. Вызывай, когда пользователь спрашивает про свои планы/расписание/встречи на конкретный день или период ("что у меня завтра", "какие планы на этой неделе", "что запланировано на пятницу"), а также перед update_calendar_event/delete_calendar_event, чтобы найти event_id, summary и start_time нужного события. date — YYYY-MM-DD, начало периода (переведи "сегодня"/"завтра"/день недели в конкретную дату сам, используя сегодняшнюю дату из инструкций). days — сколько дней подряд просмотреть начиная с date (по умолчанию 1 — только этот день; для "на этой неделе" используй 7). Если events пуст — значит на этот период ничего не запланировано, так и скажи."""
             return list_calendar_events_impl(refresh_token=calendar_refresh_token, date=date, days=days)
 
-        calendar_tools = [create_calendar_event, get_calendar_events]
+        @tool(response_format="content_and_artifact")
+        def update_calendar_event(
+            event_id: str,
+            title: str | None = None,
+            start_time: str | None = None,
+            duration_minutes: int | None = None,
+            notes: str | None = None,
+        ) -> tuple[str, dict]:
+            """Подготовить изменение существующего события в РЕАЛЬНОМ Google-календаре пользователя (перенести время, переименовать, изменить длительность или описание). event_id бери из get_calendar_events — сначала посмотри события за нужный период, чтобы найти id нужного события; если пользователь не назвал время/день события явно, уточни у него, а не угадывай. Передавай только те поля, которые реально нужно изменить — остальные оставь None, они не тронутся. start_time — если меняешь, формат YYYY-MM-DDTHH:MM:SS по московскому времени, как в create_calendar_event.
+
+ВАЖНО: эта функция НЕ меняет событие сразу. Она только показывает пользователю карточку с кнопкой «Подтвердить» — изменения реально применятся, только когда пользователь сам нажмёт эту кнопку. После вызова НИКОГДА не говори, что событие уже изменено — просто сообщи, что изменение показано пользователю на подтверждение."""
+            result = draft_update_calendar_event_impl(
+                event_id=event_id, title=title, start_time=start_time, duration_minutes=duration_minutes, notes=notes
+            )
+            return "Изменение события подготовлено и показано пользователю для подтверждения.", result
+
+        @tool(response_format="content_and_artifact")
+        def delete_calendar_event(event_ids: list[str], summaries: list[str], start_times: list[str]) -> tuple[str, dict]:
+            """Подготовить удаление ОДНОГО ИЛИ НЕСКОЛЬКИХ событий из РЕАЛЬНОГО Google-календаря пользователя за один вызов (например "удали все встречи сегодня" — несколько событий сразу, а не по одному вызову на каждое). event_ids, summaries, start_times — три списка ОДИНАКОВОЙ длины; элемент с индексом i в каждом списке — это event_id/название/время одного и того же i-го события. Бери эти значения из get_calendar_events — сначала посмотри события за нужный период, чтобы найти event_id, summary и start_time всех событий, которые нужно удалить; не удаляй по одной лишь догадке, если неоднозначно, какое событие имелось в виду — уточни у пользователя. Для одного события передай списки из одного элемента.
+
+ВАЖНО: эта функция НЕ удаляет события сразу. Она только показывает пользователю карточку со списком событий и кнопкой подтверждения — события реально удалятся, только когда пользователь сам подтвердит. После вызова НИКОГДА не говори, что события уже удалены — просто сообщи, что удаление показано пользователю на подтверждение."""
+            result = draft_delete_calendar_events_impl(event_ids=event_ids, summaries=summaries, start_times=start_times)
+            return "Удаление событий подготовлено и показано пользователю для подтверждения.", result
+
+        calendar_tools = [create_calendar_event, get_calendar_events, update_calendar_event, delete_calendar_event]
 
     email_tools: list[BaseTool] = []
     gmail_refresh_token = user_settings.get_gmail_refresh_token(user_id)
@@ -923,6 +1223,9 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
 
         После поиска используй полученные результаты как источник ответа.
         Не выдумывай сведения, которых нет в результатах поиска.
+        Ссылки на источники оформляй как markdown-ссылки "[название](url)"
+        прямо в тексте рядом с фактом — никогда как "[sources=[N]]" или
+        отдельный список ссылок в конце.
         """
         return web_search_impl(query=query)
 
@@ -981,17 +1284,27 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
 
     @tool
     def get_exchange_rate(currency: str) -> dict:
-        """Узнать официальный курс ЦБ РФ валюты к рублю на сегодня. Вызывай ТОЛЬКО когда пользователь явно спрашивает про курс/сколько стоит валюта — простое упоминание валюты в разговоре (например "зарплата в долларах") не повод её вызывать. currency — трёхбуквенный код валюты (например USD, EUR, CNY)."""
+        """Узнать официальный курс ЦБ РФ валюты к рублю на сегодня. Вызывай ТОЛЬКО когда пользователь явно спрашивает про курс/сколько стоит валюта — простое упоминание валюты в разговоре (например "зарплата в долларах") не повод её вызывать. currency — трёхбуквенный код валюты (например USD, EUR, CNY). Если пользователь просит курс НЕСКОЛЬКИХ валют (например "курс доллара и юаня") — вызови эту функцию отдельно для каждой. Если пользователь спрашивает, как курс ИЗМЕНИЛСЯ за период (за неделю/месяц и т.п.) — используй get_exchange_rate_history, а не эту функцию."""
         return get_exchange_rate_impl(currency)
+
+    @tool
+    def get_exchange_rate_history(currency: str, days_ago: int = 7) -> dict:
+        """Сравнить официальный курс ЦБ РФ валюты к рублю сегодня с курсом N дней назад. Вызывай, когда пользователь явно спрашивает про ИЗМЕНЕНИЕ/ДИНАМИКУ курса за период ("курс доллара за неделю", "как изменился юань за месяц", "курс евро вырос или упал"). currency — трёхбуквенный код валюты (USD, EUR, CNY и т.п.). days_ago — сколько дней назад брать точку сравнения: 7 для "за неделю" (по умолчанию), 30 для "за месяц", 1 для "за день/сутки". Если нужно несколько валют — вызови отдельно для каждой. Результат содержит current и past (значение и дата), change_rub (разница в рублях) и change_pct (изменение в процентах) — расскажи пользователю оба курса и как курс изменился, не только цифры."""
+        return get_exchange_rate_history_impl(currency, days_ago=days_ago)
 
     return [
         create_task,
         list_tasks,
         add_expense,
-        get_expense_summary,
+        add_income,
+        list_transactions,
+        update_transaction,
+        get_finance_summary,
         log_meal,
         log_weight,
         get_health_summary,
+        get_product_info,
+        search_product,
         *intervals_tools,
         *calendar_tools,
         *email_tools,
@@ -1000,22 +1313,41 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
         build_route,
         get_weather,
         get_exchange_rate,
+        get_exchange_rate_history,
     ]
 
 
-def build_memory_tool(user_id: str) -> BaseTool:
-    """The memory-retriever tool: the agent decides on its own, per query,
-    whether to call this (and how many times) before answering."""
+def build_memory_tools(user_id: str) -> list[BaseTool]:
+    """The two memory-retriever tools: the agent decides on its own, per
+    query, whether/which to call (and how many times) before answering."""
 
     @tool(MEMORY_TOOL_NAME)
     def search_memory(query: str) -> str:
-        """Найти релевантные факты о пользователе в долгосрочной памяти. Передавай короткий целевой поисковый запрос (например «любимая еда» или «дедлайн проекта»), а не весь вопрос пользователя целиком. Можно вызывать несколько раз подряд с разными формулировками, если первого результата недостаточно."""
-        context = memory_bridge.retrieve_memory_context(query, user_id, top_k=5)
+        """Найти релевантные факты о пользователе в долгосрочной памяти. Передавай короткий целевой поисковый запрос (например «любимая еда» или «дедлайн проекта»), а не весь вопрос пользователя целиком. Возвращает только top-20 наиболее релевантных запросу фактов — для запроса «покажи ВСЁ»/«весь список»/«все события» используй list_memories, а не эту функцию, иначе часть фактов останется не показана. Можно вызывать несколько раз подряд с разными формулировками, если первого результата недостаточно."""
+        context = memory_bridge.retrieve_memory_context(query, user_id, top_k=20)
         print("ПОИСК ПО ПАМЯТИ ДАЛ РЕЗУЛЬТАТ:\n", flush=True)
         print(context, flush=True)
         return context if context else "По этому запросу в памяти ничего не найдено."
 
-    return search_memory
+    @tool(LIST_MEMORIES_TOOL_NAME)
+    def list_memories(source: str | None = None) -> dict:
+        """Показать ВСЕ факты в долгосрочной памяти (профиль пользователя), без ранжирования по релевантности — в отличие от search_memory, которая отдаёт только top-20 самых релевантных запросу. Вызывай, когда пользователь явно просит показать всё, что о нём известно ("что вообще есть в памяти", "мой профиль"). Для списка событий календаря используй calendar_events, для писем — search_emails/inbox_overview: там полные точные данные. source — необязательный фильтр по источнику факта: "email", "telegram", "calendar" или "text" (сказано напрямую пользователем в чате); не указывай, чтобы получить факты из всех источников сразу."""
+        memories = memory_bridge.list_memories(user_id)
+        if source:
+            memories = [m for m in memories if any(s.get("type") == source for s in m.get("sources") or [])]
+        trimmed = [
+            {
+                "type": m["type"],
+                "content": m["content"],
+                "sources": m["sources"],
+                "valid_from": m["valid_from"],
+                "valid_until": m["valid_until"],
+            }
+            for m in memories
+        ]
+        return {"count": len(trimmed), "memories": trimmed}
+
+    return [search_memory, list_memories]
 
 
 def get_sandbox_snapshot(user_id: str) -> dict[str, Any]:
@@ -1026,7 +1358,7 @@ def get_sandbox_snapshot(user_id: str) -> dict[str, Any]:
             (user_id,),
         ).fetchall()
         expenses = conn.execute(
-            "SELECT id, amount, category, note, date, created_at FROM expenses "
+            "SELECT id, amount, type, category, note, date, created_at FROM expenses "
             "WHERE user_id = ? ORDER BY created_at DESC LIMIT 20",
             (user_id,),
         ).fetchall()

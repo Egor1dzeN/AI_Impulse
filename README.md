@@ -316,13 +316,19 @@ Open-Meteo, ЦБ РФ):
 | `create_task(title, due_date?, notes?)` | создать задачу/напоминание |
 | `list_tasks()` | последние 20 задач |
 | `add_expense(amount, category, date, note?)` | записать трату |
-| `get_expense_summary()` | сводка трат по месяцам/категориям |
+| `add_income(amount, category, date, note?)` | записать пополнение/доход |
+| `list_transactions()` | последние 30 трат и пополнений (с id) |
+| `update_transaction(transaction_id, amount?, category?, date?, note?)` | изменить существующую трату/пополнение по id |
+| `get_finance_summary()` | сводка трат и пополнений: баланс, разбивка по месяцам/категориям |
 | `log_meal(name, kcal, date, protein?, fat?, carbs?)` | записать приём пищи |
 | `log_weight(value_kg, date)` | записать вес |
 | `get_health_summary()` | калории за сегодня относительно цели (`DAILY_KCAL_GOAL = 2200`) и история веса |
+| `get_product_info(barcode)` | продукт по штрихкоду через Open Food Facts (без ключа) — название, бренд, КБЖУ на 100 г |
+| `search_product(query)` | поиск продукта по названию через Open Food Facts (search-a-licious) — несколько похожих товаров с КБЖУ на 100 г |
 | `show_map(place)` | геокодит место через Nominatim (OpenStreetMap) и рендерит встроенную карту в чате |
 | `get_weather(place)` | текущая погода через Open-Meteo (геокодинг тот же, что у `show_map`) |
 | `get_exchange_rate(currency)` | официальный курс ЦБ РФ (XML `cbr.ru/scripts/XML_daily.asp`) валюты к рублю на сегодня |
+| `get_exchange_rate_history(currency, days_ago=7)` | сравнивает сегодняшний курс с курсом `days_ago` дней назад (та же CBR-функция с `date_req`) — текущее/прошлое значение и разница в рублях/процентах |
 | `search_memory(query)` | (`MEMORY_TOOL_NAME`) — единственный "тул чтения", подключён к `memory_bridge.retrieve_memory_context`; не считается "действием" (не попадает в `done.action`) |
 
 `show_map`/`get_weather`/`get_exchange_rate` принимают только реальные

@@ -34,6 +34,28 @@ CREATE TABLE IF NOT EXISTS sent_email_drafts (
     sent_at TEXT NOT NULL
 );
 
+-- Same idempotency guard as sent_email_drafts above, for the calendar
+-- create/update/delete confirmation cards (POST /api/calendar/confirm) —
+-- see google_calendar.py's action_already_done()/mark_action_done().
+CREATE TABLE IF NOT EXISTS calendar_action_drafts (
+    draft_id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    done_at TEXT NOT NULL
+);
+
+-- Maps an imported calendar record's own `id` (from the uploaded
+-- .jsonl/.json export) to the real event it created on the user's Google
+-- Calendar, so re-running the same Data Import (POST /api/import,
+-- source=calendar, sync_calendar=true) is a no-op instead of creating
+-- duplicates — see main.py's import_calendar_to_google().
+CREATE TABLE IF NOT EXISTS imported_calendar_events (
+    user_id TEXT NOT NULL,
+    external_id TEXT NOT NULL,
+    google_event_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    PRIMARY KEY (user_id, external_id)
+);
+
 CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
@@ -70,10 +92,15 @@ CREATE TABLE IF NOT EXISTS expenses (
     id TEXT PRIMARY KEY,
     user_id TEXT NOT NULL,
     amount REAL NOT NULL,
+    type TEXT NOT NULL DEFAULT 'expense',
     category TEXT NOT NULL,
     note TEXT,
     date TEXT NOT NULL,
-    created_at TEXT NOT NULL
+    created_at TEXT NOT NULL,
+    source TEXT,
+    external_id TEXT,
+    merchant TEXT,
+    balance REAL
 );
 CREATE INDEX IF NOT EXISTS idx_expenses_user ON expenses(user_id, date);
 
@@ -98,6 +125,71 @@ CREATE TABLE IF NOT EXISTS weights (
     created_at TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_weights_user ON weights(user_id, date);
+
+-- Imported source records kept verbatim (after masking) so exact questions
+-- (free slots, spend per month, unanswered mail, ...) are answered by
+-- deterministic queries instead of the fuzzy fact memory. See
+-- personal_data.py / personal_analytics.py.
+CREATE TABLE IF NOT EXISTS raw_emails (
+    user_id TEXT NOT NULL,
+    id TEXT NOT NULL,
+    thread_id TEXT,
+    folder TEXT,
+    direction TEXT NOT NULL DEFAULT 'in',
+    date TEXT,
+    from_name TEXT,
+    from_email TEXT,
+    to_json TEXT,
+    cc_json TEXT,
+    subject TEXT,
+    body TEXT,
+    attachments_json TEXT,
+    flags_json TEXT,
+    PRIMARY KEY (user_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_raw_emails_user_date ON raw_emails(user_id, date);
+
+CREATE TABLE IF NOT EXISTS raw_calendar_events (
+    user_id TEXT NOT NULL,
+    id TEXT NOT NULL,
+    series_id TEXT,
+    summary TEXT,
+    description TEXT,
+    location TEXT,
+    start TEXT,
+    end TEXT,
+    all_day INTEGER NOT NULL DEFAULT 0,
+    timezone TEXT,
+    status TEXT,
+    transparency TEXT,
+    event_type TEXT,
+    importance TEXT,
+    organizer_email TEXT,
+    organizer_name TEXT,
+    attendees_json TEXT,
+    recurrence_json TEXT,
+    original_start TEXT,
+    flags_json TEXT,
+    PRIMARY KEY (user_id, id)
+);
+CREATE INDEX IF NOT EXISTS idx_raw_calendar_user_start ON raw_calendar_events(user_id, start);
+
+CREATE TABLE IF NOT EXISTS raw_messages (
+    user_id TEXT NOT NULL,
+    chat TEXT NOT NULL,
+    msg_id TEXT NOT NULL,
+    date TEXT,
+    sender TEXT,
+    is_out INTEGER NOT NULL DEFAULT 0,
+    text TEXT,
+    reply_to TEXT,
+    flags_json TEXT,
+    PRIMARY KEY (user_id, chat, msg_id)
+);
+CREATE INDEX IF NOT EXISTS idx_raw_messages_user_date ON raw_messages(user_id, date);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_expenses_external
+    ON expenses(user_id, source, external_id) WHERE external_id IS NOT NULL;
 """
 
 
@@ -137,6 +229,20 @@ def _migrate(conn: sqlite3.Connection) -> None:
 
     if user_columns and "gmail_refresh_token" not in user_columns:
         conn.execute("ALTER TABLE users ADD COLUMN gmail_refresh_token TEXT")
+
+    # Rows written before income tracking existed have no "type" — they
+    # were all spends, so backfill 'expense' rather than leaving them NULL.
+    expense_columns = {row["name"] for row in conn.execute("PRAGMA table_info(expenses)").fetchall()}
+    if expense_columns and "type" not in expense_columns:
+        conn.execute("ALTER TABLE expenses ADD COLUMN type TEXT NOT NULL DEFAULT 'expense'")
+    for column, ddl in (
+        ("source", "TEXT"),
+        ("external_id", "TEXT"),
+        ("merchant", "TEXT"),
+        ("balance", "REAL"),
+    ):
+        if expense_columns and column not in expense_columns:
+            conn.execute(f"ALTER TABLE expenses ADD COLUMN {column} {ddl}")
 
     # Ensure conversations exists before the backfill below can insert into
     # it — the schema script itself only runs after this function returns.
@@ -195,6 +301,33 @@ def get_conn():
 
 def new_id() -> str:
     return uuid.uuid4().hex
+
+
+# The app-DB half of the account-wide "forget me" reset — see
+# memory_bridge.delete_all_memories() for the other half (the fact-memory
+# system, which lives in its own memory.db, not here).
+def delete_all_user_data(user_id: str) -> None:
+    """Wipe every per-user row this app itself logged, in every table that
+    has one — everything except `users` itself, so the account's
+    credentials (password hash, Google/Gmail/Intervals.icu tokens) survive
+    the reset and the user doesn't get logged out or have to reconnect
+    integrations."""
+    with get_conn() as conn:
+        for table in (
+            "tasks",
+            "expenses",
+            "meals",
+            "weights",
+            "imported_calendar_events",
+            "raw_emails",
+            "raw_calendar_events",
+            "raw_messages",
+            "sent_email_drafts",
+            "calendar_action_drafts",
+            "chat_messages",
+            "conversations",
+        ):
+            conn.execute(f"DELETE FROM {table} WHERE user_id = ?", (user_id,))
 
 
 def now_iso() -> str:

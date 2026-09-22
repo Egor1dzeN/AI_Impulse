@@ -19,20 +19,9 @@ CREATE TABLE IF NOT EXISTS users (
     password_hash TEXT NOT NULL,
     google_id TEXT,
     intervals_icu_api_key TEXT,
-    google_calendar_refresh_token TEXT,
-    gmail_refresh_token TEXT,
     created_at TEXT NOT NULL
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id) WHERE google_id IS NOT NULL;
-
--- Guards against re-sending the same draft twice (e.g. a page refresh
--- re-rendering an already-sent draft card with a live "Send" button) —
--- POST /api/gmail/send checks this before calling Gmail's API at all.
-CREATE TABLE IF NOT EXISTS sent_email_drafts (
-    draft_id TEXT PRIMARY KEY,
-    user_id TEXT NOT NULL,
-    sent_at TEXT NOT NULL
-);
 
 CREATE TABLE IF NOT EXISTS conversations (
     id TEXT PRIMARY KEY,
@@ -131,12 +120,6 @@ def _migrate(conn: sqlite3.Connection) -> None:
         env_key = os.environ.get("INTERVALS_ICU_API_KEY")
         if env_key:
             conn.execute("UPDATE users SET intervals_icu_api_key = ?", (env_key,))
-
-    if user_columns and "google_calendar_refresh_token" not in user_columns:
-        conn.execute("ALTER TABLE users ADD COLUMN google_calendar_refresh_token TEXT")
-
-    if user_columns and "gmail_refresh_token" not in user_columns:
-        conn.execute("ALTER TABLE users ADD COLUMN gmail_refresh_token TEXT")
 
     # Ensure conversations exists before the backfill below can insert into
     # it — the schema script itself only runs after this function returns.

@@ -9,7 +9,7 @@ from typing import Any
 import requests
 from langchain_core.tools import BaseTool, tool
 
-from . import db, gmail, google_calendar, memory_bridge, user_settings
+from . import db, memory_bridge, user_settings
 
 MEMORY_TOOL_NAME = "search_memory"
 
@@ -27,58 +27,6 @@ def create_task_impl(user_id: str, title: str, due_date: str | None = None, note
             (row_id, user_id, title, due_date, notes, db.now_iso()),
         )
     return {"id": row_id, "title": title, "due_date": due_date, "notes": notes}
-
-
-def create_calendar_event_impl(
-    refresh_token: str, title: str, start_time: str, duration_minutes: int = 30, notes: str | None = None
-) -> dict[str, Any]:
-    """Create a real event (with a popup reminder) on the user's own Google
-    Calendar — unlike create_task_impl above, which only writes to this
-    app's internal tasks table. See google_calendar.py for the OAuth/API
-    details; ToolNode(handle_tool_errors=True) in agent_graph.py turns any
-    exception here (revoked access, a malformed start_time, ...) into a
-    ToolMessage the model can relay to the user instead of crashing the turn."""
-    return google_calendar.create_event(
-        refresh_token=refresh_token,
-        summary=title,
-        start_iso=start_time,
-        duration_minutes=duration_minutes,
-        description=notes,
-    )
-
-
-def list_calendar_events_impl(refresh_token: str, date: str, days: int = 1) -> dict[str, Any]:
-    """Read events from the user's own Google Calendar — the read-side
-    counterpart to create_calendar_event_impl above."""
-    return {"events": google_calendar.list_events(refresh_token=refresh_token, date=date, days=days)}
-
-
-# ============================================================
-# TOPIC 1b — EMAIL (GMAIL)
-# ============================================================
-#
-# Deliberately asymmetric with the calendar tools above: there is NO
-# send_email_impl / send tool exposed to the agent at all. draft_email_impl
-# only prepares the content and hands it to the frontend as an artifact
-# card with its own "Send" button — actually calling gmail.send_message
-# happens exclusively in main.py's POST /api/gmail/send, triggered by that
-# button, never by the agent's own tool-calling loop. Sending mail is an
-# irreversible action visible to a third party, so confirmation here is a
-# real UI gate, not just a system-prompt instruction the model could ignore
-# or misfire on (as GigaChat-2's JSON-formatting quirks already showed
-# elsewhere in this codebase — see memory/gigachat_text_model.py).
-
-
-def list_emails_impl(refresh_token: str, query: str = "", max_results: int = 10) -> dict[str, Any]:
-    return {"emails": gmail.list_messages(refresh_token=refresh_token, query=query, max_results=max_results)}
-
-
-def get_email_impl(refresh_token: str, message_id: str) -> dict[str, Any]:
-    return gmail.get_message(refresh_token=refresh_token, message_id=message_id)
-
-
-def draft_email_impl(to: str, subject: str, body: str) -> dict[str, Any]:
-    return {"draft_id": db.new_id(), "to": to, "subject": subject, "body": body}
 
 
 def list_tasks_impl(user_id: str) -> dict[str, Any]:
@@ -582,7 +530,7 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
 
     @tool
     def create_task(title: str, due_date: str | None = None, notes: str | None = None) -> dict:
-        """Создать задачу во внутреннем списке задач приложения (НЕ синхронизируется с Google Calendar и не присылает уведомлений в конкретное время). Используй для простых дел без точного времени ("добавь задачу купить молоко", "нужно доделать отчёт до пятницы"). Если пользователь просит именно напоминание/событие на конкретные дату И время ("напомни завтра в 9 утра") — используй create_calendar_event, если она доступна в списке функций, а не эту. due_date — YYYY-MM-DD, опционально."""
+        """Создать задачу/напоминание с дедлайном. Действие на запись. due_date — YYYY-MM-DD, опционально."""
         return create_task_impl(user_id=user_id, title=title, due_date=due_date, notes=notes)
 
     @tool
@@ -668,54 +616,6 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
 
         intervals_tools = [log_workout, get_workouts, get_workout_route]
 
-    calendar_tools: list[BaseTool] = []
-    calendar_refresh_token = user_settings.get_google_calendar_refresh_token(user_id)
-    if calendar_refresh_token:
-
-        @tool
-        def create_calendar_event(
-            title: str, start_time: str, duration_minutes: int = 30, notes: str | None = None
-        ) -> dict:
-            """Поставить напоминание/событие в РЕАЛЬНЫЙ Google-календарь пользователя (не путать с create_task — та пишет только во внутренний список задач приложения, без синхронизации с Google). Вызывай ТОЛЬКО когда пользователь явно просит поставить напоминание/событие на конкретное время или дату ("напомни завтра в 9 утра", "поставь встречу в календарь на пятницу в 15:00"). title — короткое название. start_time — ОБЯЗАТЕЛЬНО в формате YYYY-MM-DDTHH:MM:SS по московскому времени (Europe/Moscow), без указания смещения часового пояса — сам разреши относительные даты/время ("завтра", "через час", "в 9 утра") в этот формат, используя сегодняшнюю дату из инструкций. duration_minutes — длительность события в минутах (по умолчанию 30), если пользователь не назвал — не спрашивай, просто оставь по умолчанию. В момент start_time пользователю придёт всплывающее уведомление в Google Calendar."""
-            return create_calendar_event_impl(
-                refresh_token=calendar_refresh_token,
-                title=title,
-                start_time=start_time,
-                duration_minutes=duration_minutes,
-                notes=notes,
-            )
-
-        @tool
-        def get_calendar_events(date: str, days: int = 1) -> dict:
-            """Посмотреть, что запланировано в РЕАЛЬНОМ Google-календаре пользователя. Вызывай, когда пользователь спрашивает про свои планы/расписание/встречи на конкретный день или период ("что у меня завтра", "какие планы на этой неделе", "что запланировано на пятницу"). date — YYYY-MM-DD, начало периода (переведи "сегодня"/"завтра"/день недели в конкретную дату сам, используя сегодняшнюю дату из инструкций). days — сколько дней подряд просмотреть начиная с date (по умолчанию 1 — только этот день; для "на этой неделе" используй 7). Если events пуст — значит на этот период ничего не запланировано, так и скажи."""
-            return list_calendar_events_impl(refresh_token=calendar_refresh_token, date=date, days=days)
-
-        calendar_tools = [create_calendar_event, get_calendar_events]
-
-    email_tools: list[BaseTool] = []
-    gmail_refresh_token = user_settings.get_gmail_refresh_token(user_id)
-    if gmail_refresh_token:
-
-        @tool
-        def list_emails(query: str = "", max_results: int = 10) -> dict:
-            """Посмотреть список писем в почте пользователя (Gmail). Вызывай, когда пользователь спрашивает про свою почту/письма ("есть новые письма?", "что писал Иван", "покажи письма от банка"). query — поисковый запрос в синтаксисе Gmail (необязательно): "from:иван", "is:unread", "subject:счёт", можно комбинировать через пробел; пустая строка — просто последние письма во входящих. Возвращает id, from, subject, date, snippet (короткий отрывок) для каждого письма — snippet может быть недостаточно, чтобы ответить на вопрос о содержимом письма, тогда вызови get_email с нужным id."""
-            return list_emails_impl(refresh_token=gmail_refresh_token, query=query, max_results=max_results)
-
-        @tool
-        def get_email(message_id: str) -> dict:
-            """Получить полный текст одного письма по id (из list_emails). Вызывай, когда пользователю нужно содержимое конкретного письма, а не только тема/отправитель/дата. Если found=false — письмо не существует (id устарел или придуман), сообщи об этом и предложи посмотреть list_emails заново."""
-            return get_email_impl(refresh_token=gmail_refresh_token, message_id=message_id)
-
-        @tool(response_format="content_and_artifact")
-        def draft_email(to: str, subject: str, body: str) -> tuple[str, dict]:
-            """Подготовить черновик письма для отправки через Gmail пользователя. Вызывай ТОЛЬКО когда пользователь явно просит написать/отправить письмо, и только после того как ты уже знаешь адрес получателя, тему и текст (при необходимости уточни их у пользователя или найди адрес через search_memory/list_emails, прежде чем вызывать). to — email получателя. subject — тема. body — полный текст письма на языке пользователя, готовый к отправке, без плейсхолдеров.
-
-ВАЖНО: эта функция НЕ отправляет письмо. Она только показывает пользователю черновик с кнопкой «Отправить» — реальная отправка происходит, только когда пользователь сам нажмёт эту кнопку. После вызова НИКОГДА не говори, что письмо отправлено или что ты его отправил — просто сообщи, что черновик готов и показан пользователю на подтверждение. Не вызывай draft_email повторно для того же письма, если пользователь явно не попросил его изменить."""
-            result = draft_email_impl(to=to, subject=subject, body=body)
-            return "Черновик подготовлен и показан пользователю для подтверждения отправки.", result
-
-        email_tools = [list_emails, get_email, draft_email]
-
     @tool
     def show_map(place: str) -> dict:
         """Показать место на карте прямо в чате. Вызывай ТОЛЬКО когда пользователь явно просит показать карту или спрашивает "где находится X" — простое упоминание места в разговоре (например "я живу в X") не повод её вызывать. Если пользователь просит именно маршрут/путь/сколько ехать из одного места в другое — используй build_route, а не эту функцию. place — только реальное название места. Если пользователь не назвал место явно (например "покажи на карте где я живу") — сначала вызови search_memory, чтобы узнать место из памяти, и передай сюда именно то, что она вернула, слово в слово. Никогда не придумывай и не дописывай место от себя — если в памяти его нет, не вызывай эту функцию, а спроси пользователя. После вызова не добавляй в ответ данные из других функций (погоду, курс и т.п.), если их не просили."""
@@ -759,8 +659,6 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
         log_weight,
         get_health_summary,
         *intervals_tools,
-        *calendar_tools,
-        *email_tools,
         show_map,
         build_route,
         get_weather,

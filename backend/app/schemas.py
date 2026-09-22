@@ -72,15 +72,6 @@ class SandboxOut(BaseModel):
 
 class SettingsOut(BaseModel):
     intervals_icu_connected: bool
-    google_calendar_connected: bool
-    gmail_connected: bool
-
-
-class SendEmailRequest(BaseModel):
-    draft_id: str
-    to: str
-    subject: str
-    body: str
 
 
 class UpdateSettingsRequest(BaseModel):

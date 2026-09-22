@@ -1,9 +1,10 @@
---extra-index-url https://download.pytorch.org/whl/cu128
+#--extra-index-url https://download.pytorch.org/whl/cu128
 
 fastapi
 uvicorn[standard]
 pydantic
-torch==2.11.0+cu128
+#torch==2.11.0+cu128
+torch
 transformers
 accelerate
 bitsandbytes
@@ -16,11 +17,8 @@ protobuf
 langchain-core
 langgraph
 langchain-mcp-adapters
-gigachat
-openai
 pyjwt
 passlib[bcrypt]
 bcrypt==4.0.1
 google-auth
 requests
-imageio-ffmpeg

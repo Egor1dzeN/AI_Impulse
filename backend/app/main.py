@@ -22,11 +22,11 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
-from fastapi import BackgroundTasks, Depends, FastAPI, File, HTTPException, UploadFile
+from fastapi import BackgroundTasks, Depends, FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import RedirectResponse, StreamingResponse
+from fastapi.responses import StreamingResponse
 
-from . import agent, auth, conversations, db, gmail, google_calendar, mcp_tools, memory_bridge, tools, transcription, user_settings
+from . import agent, auth, conversations, db, mcp_tools, memory_bridge, tools, user_settings
 from .schemas import (
     AddMemoryRequest,
     ChatMessageOut,
@@ -38,15 +38,10 @@ from .schemas import (
     MemorySearchOut,
     RegisterRequest,
     SandboxOut,
-    SendEmailRequest,
     SettingsOut,
     TokenOut,
     UpdateSettingsRequest,
 )
-
-FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:5173")
-
-logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Impulse Agent API")
 
@@ -67,6 +62,30 @@ async def on_startup() -> None:
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "ok"}
+
+
+@app.post("/api/mcp/reload")
+async def reload_mcp_servers(user_id: str = Depends(auth.get_current_user_id)) -> dict:
+    """Переопрашивает все серверы из mcp_servers.json и обновляет
+    кэшированный список MCP-инструментов — без перезапуска всего
+    бэкенда (а значит без повторной загрузки локальных моделей в
+    память видеокарты, которая при полном рестарте занимает время).
+
+    Использовать: после того как в mcp_servers.json добавили/поправили
+    сервер (например, чтобы подключить новый API прямо во время защиты),
+    дёрнуть этот эндпоинт — и агент сразу увидит новый инструмент в
+    следующем же сообщении, без перезапуска ./backend.sh.
+
+    Требует авторизации (как и остальные /api/* эндпоинты) просто чтобы
+    случайный посторонний запрос не мог дёргать перезагрузку — сама
+    операция не завязана на конкретного user_id.
+    """
+    tools_list = await mcp_tools.refresh_mcp_tools()
+    return {
+        "status": "ok",
+        "tools_count": len(tools_list),
+        "tools": sorted(t.name for t in tools_list),
+    }
 
 
 @app.post("/api/auth/register", response_model=TokenOut)
@@ -110,43 +129,25 @@ def delete_conversation(conversation_id: str, user_id: str = Depends(auth.get_cu
 
 @app.post("/api/chat")
 def chat(
-        req: ChatRequest,
-        background_tasks: BackgroundTasks,
-        user_id: str = Depends(auth.get_current_user_id),
+    req: ChatRequest,
+    background_tasks: BackgroundTasks,
+    user_id: str = Depends(auth.get_current_user_id),
 ) -> StreamingResponse:
     if not req.message.strip():
         raise HTTPException(status_code=400, detail="empty message")
 
     conversations.assert_owned(req.conversation_id, user_id)
 
-    # Формируем расширенное сообщение для подачи в LLM
-    augmented_message = f"{req.message}\n\nНе забудь посмотреть в память, вдруг там что-то важное" ################### Костыль
-
     def event_stream():
-        # Передаем дополненное сообщение (augmented_message) агенту
         for event in agent.handle_chat_turn_stream(
-                user_id, req.conversation_id, augmented_message, enable_thinking=req.enable_thinking
+            user_id, req.conversation_id, req.message, enable_thinking=req.enable_thinking
         ):
             yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
 
     response = StreamingResponse(event_stream(), media_type="text/event-stream")
-
-    # Оригинальное сообщение (req.message) отправляем в memory_bridge
     background_tasks.add_task(agent.extract_memory_background, user_id, req.message)
     response.background = background_tasks
     return response
-
-
-@app.post("/api/transcribe")
-async def transcribe(
-    file: UploadFile = File(...), user_id: str = Depends(auth.get_current_user_id)
-) -> dict:
-    audio_bytes = await file.read()
-    if not audio_bytes:
-        raise HTTPException(status_code=400, detail="empty audio file")
-    transcription.save_debug_copy(audio_bytes)
-    text = transcription.transcribe_audio(audio_bytes)
-    return {"text": text}
 
 
 @app.get("/api/history", response_model=list[ChatMessageOut])
@@ -219,105 +220,13 @@ def get_settings(user_id: str = Depends(auth.get_current_user_id)) -> dict:
 def update_settings(req: UpdateSettingsRequest, user_id: str = Depends(auth.get_current_user_id)) -> dict:
     if req.intervals_icu_api_key is not None:
         key = req.intervals_icu_api_key.strip()
-        try:
-            if key:
-                # Validate against Intervals.icu before saving — otherwise a
-                # typo'd key would only surface later, as a cryptic mid-chat
-                # tool failure, instead of an immediate error right here.
-                if not tools.intervals_icu_key_is_valid(key):
-                    raise HTTPException(status_code=400, detail="invalid Intervals.icu API key")
-                user_settings.set_intervals_icu_key(user_id, key)
-            else:
-                user_settings.set_intervals_icu_key(user_id, None)
-        except ValueError as exc:
-            # Stale JWT for a user_id that no longer exists (e.g. after a
-            # DB reset) — surface it instead of silently no-oping the save.
-            raise HTTPException(status_code=401, detail=str(exc)) from exc
+        if key:
+            # Validate against Intervals.icu before saving — otherwise a
+            # typo'd key would only surface later, as a cryptic mid-chat
+            # tool failure, instead of an immediate error right here.
+            if not tools.intervals_icu_key_is_valid(key):
+                raise HTTPException(status_code=400, detail="invalid Intervals.icu API key")
+            user_settings.set_intervals_icu_key(user_id, key)
+        else:
+            user_settings.set_intervals_icu_key(user_id, None)
     return user_settings.get_settings(user_id)
-
-
-@app.get("/api/google-calendar/connect")
-def google_calendar_connect(user_id: str = Depends(auth.get_current_user_id)) -> dict:
-    if not google_calendar.google_calendar_is_configured():
-        raise HTTPException(status_code=503, detail="Google Calendar is not configured on this server")
-    return {"url": google_calendar.build_authorize_url(google_calendar.create_state(user_id))}
-
-
-@app.get("/api/google-calendar/callback")
-def google_calendar_callback(code: str | None = None, state: str | None = None, error: str | None = None):
-    # Google redirects the bare browser here (no Authorization header from
-    # our frontend), so auth.get_current_user_id can't be used — the user_id
-    # travels inside `state` instead (see google_calendar.create_state).
-    if error or not code or not state:
-        return RedirectResponse(f"{FRONTEND_URL}/?google_calendar=error")
-
-    user_id = google_calendar.decode_state(state)
-    try:
-        refresh_token = google_calendar.exchange_code_for_refresh_token(code)
-        user_settings.set_google_calendar_refresh_token(user_id, refresh_token)
-    except (RuntimeError, ValueError):
-        logger.exception("Google Calendar connect failed for user_id=%s", user_id)
-        return RedirectResponse(f"{FRONTEND_URL}/?google_calendar=error")
-
-    return RedirectResponse(f"{FRONTEND_URL}/?google_calendar=connected")
-
-
-@app.post("/api/google-calendar/disconnect")
-def google_calendar_disconnect(user_id: str = Depends(auth.get_current_user_id)) -> dict:
-    refresh_token = user_settings.get_google_calendar_refresh_token(user_id)
-    if refresh_token:
-        google_calendar.revoke(refresh_token)
-        user_settings.set_google_calendar_refresh_token(user_id, None)
-    return user_settings.get_settings(user_id)
-
-
-@app.get("/api/gmail/connect")
-def gmail_connect(user_id: str = Depends(auth.get_current_user_id)) -> dict:
-    if not gmail.gmail_is_configured():
-        raise HTTPException(status_code=503, detail="Gmail is not configured on this server")
-    return {"url": gmail.build_authorize_url(gmail.create_state(user_id))}
-
-
-@app.get("/api/gmail/callback")
-def gmail_callback(code: str | None = None, state: str | None = None, error: str | None = None):
-    if error or not code or not state:
-        return RedirectResponse(f"{FRONTEND_URL}/?gmail=error")
-
-    user_id = gmail.decode_state(state)
-    try:
-        refresh_token = gmail.exchange_code_for_refresh_token(code)
-        user_settings.set_gmail_refresh_token(user_id, refresh_token)
-    except (RuntimeError, ValueError):
-        logger.exception("Gmail connect failed for user_id=%s", user_id)
-        return RedirectResponse(f"{FRONTEND_URL}/?gmail=error")
-
-    return RedirectResponse(f"{FRONTEND_URL}/?gmail=connected")
-
-
-@app.post("/api/gmail/disconnect")
-def gmail_disconnect(user_id: str = Depends(auth.get_current_user_id)) -> dict:
-    refresh_token = user_settings.get_gmail_refresh_token(user_id)
-    if refresh_token:
-        gmail.revoke(refresh_token)
-        user_settings.set_gmail_refresh_token(user_id, None)
-    return user_settings.get_settings(user_id)
-
-
-@app.post("/api/gmail/send")
-def gmail_send(req: SendEmailRequest, user_id: str = Depends(auth.get_current_user_id)) -> dict:
-    """The ONLY code path that actually calls gmail.send_message — reachable
-    exclusively from the frontend's own "Send" button on a draft_email
-    artifact card (see tools.py's TOPIC 1b comment), never from the agent's
-    tool-calling loop. draft_already_sent() makes a repeat click (e.g. after
-    a page refresh re-renders an old draft card) a safe no-op instead of a
-    duplicate email."""
-    refresh_token = user_settings.get_gmail_refresh_token(user_id)
-    if not refresh_token:
-        raise HTTPException(status_code=400, detail="Gmail is not connected")
-
-    if gmail.draft_already_sent(req.draft_id):
-        return {"already_sent": True}
-
-    result = gmail.send_message(refresh_token=refresh_token, to=req.to, subject=req.subject, body=req.body)
-    gmail.mark_draft_sent(req.draft_id, user_id)
-    return {"already_sent": False, **result}

@@ -1,0 +1,29 @@
+{
+  "_comment": "Скопировать в backend/mcp_servers.json. ВАЖНО: замените \"command\" на полный путь к python.exe ВАШЕГО venv (backend/.venv/Scripts/python.exe) — иначе подпроцесс может подхватить системный Python без пакета mcp. Пути в \"args\" — от backend/ (там, где запускается uvicorn), т.к. dev.sh/backend.sh делает cd в backend/ перед запуском.",
+
+  "documents": {
+    "transport": "stdio",
+    "command": "C:/ПУТЬ/К/ПРОЕКТУ/AI_Impulse-master/backend/.venv/Scripts/python.exe",
+    "args": ["../mcp_servers/documents_server.py"]
+  },
+  "news": {
+    "transport": "stdio",
+    "command": "C:/ПУТЬ/К/ПРОЕКТУ/AI_Impulse-master/backend/.venv/Scripts/python.exe",
+    "args": ["../mcp_servers/news_server.py"]
+  },
+  "telegram": {
+    "transport": "stdio",
+    "command": "C:/ПУТЬ/К/ПРОЕКТУ/AI_Impulse-master/backend/.venv/Scripts/python.exe",
+    "args": ["../mcp_servers/telegram_server.py"]
+  },
+  "weather": {
+    "transport": "stdio",
+    "command": "C:/ПУТЬ/К/ПРОЕКТУ/AI_Impulse-master/backend/.venv/Scripts/python.exe",
+    "args": ["../mcp_servers/weather_server.py"]
+  },
+  "openstreetmap": {
+    "transport": "stdio",
+    "command": "C:/ПУТЬ/К/ПРОЕКТУ/AI_Impulse-master/backend/.venv/Scripts/python.exe",
+    "args": ["../mcp_servers/openstreetmap_server.py"]
+  }
+}

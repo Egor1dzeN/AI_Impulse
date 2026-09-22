@@ -97,8 +97,6 @@ def get_memory_system():
             index_dir=str(DATA_DIR / "memory_index"),
             retrieval_models=retrieval_models,
             qwen=qwen,
-            dream_every_n_memories=5,
-            dream_max_memories=50,
         )
 
     return _system
@@ -147,18 +145,11 @@ def _get_lightweight_index_manager():
         if _index_manager is not None:
             return _index_manager
 
-        from model_registry import get_embedder
+        from memory_embedder import Qwen3Embedder
         from faiss_memory_index import FaissMemoryIndex
         from memory_index_manager import MemoryIndexManager
 
-        # Was `Qwen3Embedder()` directly here, bypassing model_registry's
-        # cloud.ru/GigaChat switch entirely — deleting a memory as the
-        # FIRST action in a fresh process (before any chat turn had called
-        # get_memory_system()) silently loaded the local Qwen3-Embedding-0.6B
-        # even with GIGA_CHAT_EMBEDDING set. get_embedder() applies the same
-        # precedence as chat's embedder AND shares the one cached instance
-        # with it, so calling this first never causes a second load later.
-        embedder = get_embedder()
+        embedder = Qwen3Embedder()
         index = FaissMemoryIndex(dimension=embedder.dimension, index_dir=str(DATA_DIR / "memory_index"))
         manager = MemoryIndexManager(repository=_get_repository(), embedder=embedder, index=index)
         manager.ensure_ready()

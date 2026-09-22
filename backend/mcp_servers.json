@@ -1,0 +1,7 @@
+{
+  "documents": {"transport": "stdio", "command": "/Users/petrzaznobin/Downloads/AI_Impulse-master2/backend/.venv/bin/python", "args": ["../mcp_servers/documents_server.py"]},
+  "news": {"transport": "stdio", "command": "/Users/petrzaznobin/Downloads/AI_Impulse-master2/backend/.venv/bin/python", "args": ["../mcp_servers/news_server.py"]},
+  "telegram": {"transport": "stdio", "command": "/Users/petrzaznobin/Downloads/AI_Impulse-master2/backend/.venv/bin/python", "args": ["../mcp_servers/telegram_server.py"]},
+  "weather": {"transport": "stdio", "command": "/Users/petrzaznobin/Downloads/AI_Impulse-master2/backend/.venv/bin/python", "args": ["../mcp_servers/weather_server.py"]},
+  "openstreetmap": {"transport": "stdio", "command": "/Users/petrzaznobin/Downloads/AI_Impulse-master2/backend/.venv/bin/python", "args": ["../mcp_servers/openstreetmap_server.py"]}
+}

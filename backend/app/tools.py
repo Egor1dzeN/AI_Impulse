@@ -8,6 +8,8 @@ from datetime import date, timedelta
 from typing import Any, Literal
 
 import requests
+from ddgs import DDGS
+from ddgs.exceptions import DDGSException, RatelimitException, TimeoutException
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
@@ -342,6 +344,83 @@ def get_workout_route_impl(api_key: str, workout_id: str) -> dict[str, Any]:
         return summary
 
     return {**summary, "points": points}
+
+
+# ============================================================
+# TOPIC 3c — WEB SEARCH
+# ============================================================
+
+
+def web_search_impl(query: str) -> dict[str, Any]:
+    """Search the public web through the ddgs Python metasearch client."""
+    query = (query or "").strip()
+
+    if not query:
+        return {
+            "found": False,
+            "query": query,
+            "reason": "empty_query",
+        }
+
+    try:
+        results = DDGS(timeout=10).text(
+            query,
+            region="ru-ru",
+            safesearch="moderate",
+            max_results=5,
+            backend="auto",
+        )
+    except RatelimitException as exc:
+        return {
+            "found": False,
+            "query": query,
+            "reason": "search_rate_limited",
+            "error": str(exc),
+        }
+    except TimeoutException as exc:
+        return {
+            "found": False,
+            "query": query,
+            "reason": "search_timeout",
+            "error": str(exc),
+        }
+    except DDGSException as exc:
+        return {
+            "found": False,
+            "query": query,
+            "reason": "search_error",
+            "error": str(exc),
+        }
+    except Exception as exc:
+        return {
+            "found": False,
+            "query": query,
+            "reason": "search_unexpected_error",
+            "error": str(exc),
+        }
+
+    normalized_results = []
+    for item in results or []:
+        title = str(item.get("title") or "").strip()
+        url = str(item.get("href") or item.get("url") or "").strip()
+        snippet = str(item.get("body") or item.get("content") or "").strip()
+
+        if not title and not url and not snippet:
+            continue
+
+        normalized_results.append(
+            {
+                "title": title,
+                "url": url,
+                "snippet": snippet,
+            }
+        )
+
+    return {
+        "found": bool(normalized_results),
+        "query": query,
+        "results": normalized_results,
+    }
 
 
 # ============================================================
@@ -831,6 +910,23 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
         email_tools = [list_emails, get_email, draft_email]
 
     @tool
+    def web_search(query: str) -> dict:
+        """Поиск информации в интернете.
+
+        Вызывай этот инструмент, когда не знаешь ответ, не уверен в фактах,
+        информация может быть устаревшей или пользователю нужны актуальные
+        сведения из сети.
+
+        query — СФОРМУЛИРУЙ САМ как короткий, точный поисковый запрос по сути
+        вопроса пользователя. Не передавай весь вопрос целиком, если можно
+        сформулировать более точный запрос.
+
+        После поиска используй полученные результаты как источник ответа.
+        Не выдумывай сведения, которых нет в результатах поиска.
+        """
+        return web_search_impl(query=query)
+
+    @tool
     def show_map(place: str) -> dict:
         """Показать место на карте прямо в чате. Вызывай ТОЛЬКО когда пользователь явно просит показать карту или спрашивает "где находится X" — простое упоминание места в разговоре (например "я живу в X") не повод её вызывать. Если пользователь просит именно маршрут/путь/сколько ехать из одного места в другое — используй build_route, а не эту функцию. place — только реальное название места. Если пользователь не назвал место явно (например "покажи на карте где я живу") — сначала вызови search_memory, чтобы узнать место из памяти, и передай сюда именно то, что она вернула, слово в слово. Никогда не придумывай и не дописывай место от себя — если в памяти его нет, не вызывай эту функцию, а спроси пользователя. После вызова не добавляй в ответ данные из других функций (погоду, курс и т.п.), если их не просили."""
         return geocode_location_impl(place)
@@ -899,6 +995,7 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
         *intervals_tools,
         *calendar_tools,
         *email_tools,
+        web_search,
         show_map,
         build_route,
         get_weather,

@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import os
+import json
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from datetime import date, timedelta
-from typing import Any
+from typing import Any, Literal
 
 import requests
 from langchain_core.tools import BaseTool, tool
+from pydantic import BaseModel, Field
 
 from . import db, gmail, google_calendar, memory_bridge, user_settings
 
@@ -404,39 +406,151 @@ MAPBOX_DIRECTIONS_URL = "https://api.mapbox.com/directions/v5/mapbox/{profile}/{
 _ROUTE_PROFILES = {"driving", "walking", "cycling"}
 
 
-def build_route_impl(origin: str, destination: str, profile: str = "driving") -> dict[str, Any]:
+class RouteLocation(BaseModel):
+    """Внутренняя структурированная точка маршрута."""
+
+    place: str = Field(default="")
+    city: str = Field(default="")
+    country: str = Field(default="")
+
+
+RouteProfile = Literal["driving", "walking", "cycling"]
+
+
+def _coerce_route_location(value: str) -> RouteLocation:
+    """Convert the LLM-facing string argument into an internal location.
+
+    GigaChat/LangChain in this project may serialize a structured tool argument
+    as a JSON string. Accept both that representation and a normal plain-text
+    location so the tool boundary never fails on Pydantic dict validation.
+    """
+    value = (value or "").strip()
+
+    if value.lower() in {"false", "null", "none", ""}:
+        return RouteLocation()
+
+    try:
+        parsed = json.loads(value)
+    except (json.JSONDecodeError, TypeError):
+        parsed = None
+
+    if isinstance(parsed, dict):
+        return RouteLocation(
+            place=str(parsed.get("place", "") or "").strip(),
+            city=str(parsed.get("city", "") or "").strip(),
+            country=str(parsed.get("country", "") or "").strip(),
+        )
+
+    return RouteLocation(place=value)
+
+
+def _route_location_query(location: RouteLocation) -> str:
+    parts = [
+        location.place.strip(),
+        location.city.strip(),
+        location.country.strip(),
+    ]
+    return ", ".join(part for part in parts if part)
+
+
+def _geocode_route_location(location: RouteLocation) -> dict[str, Any]:
+    query = _route_location_query(location)
+
+    if not query:
+        return {
+            "found": False,
+            "query": query,
+            "reason": "empty_location",
+        }
+
+    try:
+        result = geocode_location_impl(query)
+    except requests.RequestException as exc:
+        return {
+            "found": False,
+            "query": query,
+            "reason": "geocoding_request_error",
+            "error": str(exc),
+        }
+
+    if not result.get("found"):
+        return {
+            "found": False,
+            "query": query,
+            "reason": "location_not_found",
+        }
+
+    return result
+
+
+def build_route_impl(
+    origin: str,
+    destination: str,
+    profile: str = "driving",
+) -> dict[str, Any]:
     profile = profile if profile in _ROUTE_PROFILES else "driving"
 
-    origin_loc = geocode_location_impl(origin)
+    origin_location = _coerce_route_location(origin)
+    destination_location = _coerce_route_location(destination)
+
+    origin_query = _route_location_query(origin_location)
+    destination_query = _route_location_query(destination_location)
+
+    origin_loc = _geocode_route_location(origin_location)
     if not origin_loc["found"]:
-        return {"found": False, "missing": "origin", "query": origin}
+        return {
+            "found": False,
+            "missing": "origin",
+            "query": origin_query or origin,
+            "reason": origin_loc.get("reason", "location_not_found"),
+        }
 
-    dest_loc = geocode_location_impl(destination)
+    dest_loc = _geocode_route_location(destination_location)
     if not dest_loc["found"]:
-        return {"found": False, "missing": "destination", "query": destination}
+        return {
+            "found": False,
+            "missing": "destination",
+            "query": destination_query or destination,
+            "reason": dest_loc.get("reason", "location_not_found"),
+        }
 
-    coords = f"{origin_loc['lon']},{origin_loc['lat']};{dest_loc['lon']},{dest_loc['lat']}"
-    resp = requests.get(
-        MAPBOX_DIRECTIONS_URL.format(profile=profile, coords=coords),
-        params={
-            # geojson, not the encoded "polyline" string from the earlier
-            # static-image version: the frontend now draws the route itself
-            # with Mapbox GL JS, which wants plain [lon, lat] pairs for a
-            # GeoJSON LineString source — no client-side polyline decoder
-            # needed. "full" is safe again now that this never has to fit
-            # inside a URL (that's what forced "simplified" for the old
-            # Static Images approach).
-            "geometries": "geojson",
-            "overview": "full",
-            "access_token": MAPBOX_TOKEN,
-        },
-        timeout=8,
+    coords = (
+        f"{origin_loc['lon']},{origin_loc['lat']};"
+        f"{dest_loc['lon']},{dest_loc['lat']}"
     )
-    resp.raise_for_status()
+
+    try:
+        resp = requests.get(
+            MAPBOX_DIRECTIONS_URL.format(
+                profile=profile,
+                coords=coords,
+            ),
+            params={
+                "geometries": "geojson",
+                "overview": "full",
+                "access_token": MAPBOX_TOKEN,
+            },
+            timeout=8,
+        )
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        return {
+            "found": False,
+            "missing": "route",
+            "query": f"{origin_query} -> {destination_query}",
+            "reason": "routing_request_error",
+            "error": str(exc),
+        }
+
     routes = resp.json().get("routes") or []
 
     if not routes:
-        return {"found": False, "missing": "route", "query": f"{origin} -> {destination}"}
+        return {
+            "found": False,
+            "missing": "route",
+            "query": f"{origin_query} -> {destination_query}",
+            "reason": "no_route_found",
+        }
 
     route = routes[0]
 
@@ -722,22 +836,46 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
         return geocode_location_impl(place)
 
     @tool(response_format="content_and_artifact")
-    def build_route(origin: str, destination: str, profile: str = "driving") -> tuple[dict, dict]:
-        """Построить маршрут между двумя точками: расстояние, время в пути и карта с проложенным путём. Вызывай ТОЛЬКО когда пользователь явно просит маршрут/путь/"как добраться из X в Y"/сколько ехать или идти — для простого "покажи X на карте" используй show_map, а не эту функцию. profile — один из driving (по умолчанию, на машине), walking (пешком), cycling (на велосипеде), выбирай по смыслу запроса. origin и destination — реальные названия мест; если одно из них не названо явно (например "маршрут до работы"), сначала вызови search_memory, чтобы узнать место из памяти, и передай сюда именно то, что она вернула. Карта уже показывается пользователю отдельно — в ответе просто назови расстояние и время в пути своими словами."""
-        result = build_route_impl(origin=origin, destination=destination, profile=profile)
+    def build_route(
+        origin: str,
+        destination: str,
+        profile: RouteProfile = "driving",
+    ) -> tuple[dict, dict]:
+        """Построить маршрут между двумя точками.
 
-        # response_format="content_and_artifact": `content` (returned first)
-        # is what actually lands in the model's prompt on the next turn,
-        # `artifact` is carried on the ToolMessage for the app to read but
-        # is never serialized into any prompt. route_geometry can be
-        # thousands of [lon, lat] pairs (a few hundred KB as JSON) — feeding
-        # that back into the model blew past its context window and crashed
-        # generation with a CUDA OOM. The frontend map only needs the full
-        # `result` (with route_geometry); the model only needs the summary.
+        Вызывай ТОЛЬКО когда пользователь явно просит маршрут/путь,
+        спрашивает "как добраться", "сколько ехать/идти" и т.п.
+        Для простого "покажи X на карте" используй show_map.
+
+        origin и destination — СТРОКИ в формате:
+        "название места или адрес, город, страна".
+
+        Не передавай JSON-объект. Передавай именно одну строку.
+        Не придумывай город или страну. Если пользователь не назвал точку
+        явно (например "от дома до работы"), сначала вызови search_memory,
+        чтобы узнать реальное место, и передай его сюда.
+
+        profile: driving — автомобиль, walking — пешком, cycling — велосипед.
+        Карта уже показывается пользователю отдельно. В обычный текстовый
+        ответ передавай только расстояние и время в пути.
+
+        Для совместимости принимаются также строки, содержащие JSON объекта
+        точки, но предпочтительный формат всегда обычная строка.
+        """
+        result = build_route_impl(
+            origin=origin,
+            destination=destination,
+            profile=profile,
+        )
+
         if not result["found"]:
             return result, result
 
-        summary = {k: v for k, v in result.items() if k != "route_geometry"}
+        summary = {
+            k: v
+            for k, v in result.items()
+            if k != "route_geometry"
+        }
         return summary, result
 
     @tool

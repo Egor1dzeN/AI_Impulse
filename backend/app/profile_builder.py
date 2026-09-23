@@ -29,7 +29,7 @@ from .personal_data import BANK_SOURCE, user_identity, user_timezone
 logger = logging.getLogger(__name__)
 
 MAX_MESSAGE_EVIDENCE = 70
-MAX_EMAIL_EVIDENCE = 14
+MAX_EMAIL_EVIDENCE = 30
 
 DIMENSIONS: list[dict[str, Any]] = [
     {
@@ -372,6 +372,10 @@ def _computed_facts(user_id: str) -> list[dict[str, Any]]:
         facts.append(_fact("Как к пользователю обращаются: " + "; ".join(parts) + ".", "identity", "telegram",
                            "Обращения в переписке и письмах", *overview_dates))
 
+    birthday = _birthday(user_id)
+    if birthday:
+        facts.append(birthday)
+
     city = _home_city(user_id)
     if city:
         name, count, first, last = city
@@ -393,6 +397,66 @@ def _computed_facts(user_id: str) -> list[dict[str, Any]]:
             "preferences", "email", "Регулярные рассылки во входящих", *overview_dates, fact_type="preference",
         ))
     return facts
+
+
+_BIRTH_FACT_RE = re.compile(r"(?i)родил|рожден|исполнил\w* \d+|возраст")
+_BIRTHDATE_RE = re.compile(r"(?i)(?:дата рождения|д\.?\s?р\.?|родил(?:ся|ась))\s*[:—-]?\s*(\d{1,2})\.(\d{1,2})\.(\d{4})")
+_GREETING_RE = re.compile(r"(?i)с\s+(днём|днем|днюх\w*|др\b)|с\s+днем\s+рождения|с\s+днём\s+рождения|happy birthday|поздравля\w+ с дн")
+# "29 — прекрасный возраст", "28 лет"; not "Тебе уже 30?" (a joke/question) or sums/times.
+_AGE_IN_GREETING_RE = re.compile(r"(?<![\d.])(\d{2})(?!\s*(?:₽|руб|%|:|\.\d|\?|\)|😄|😂))\s*(?:—|-)?\s*(?:лет|год|года)?\b(?![^.!\n]{0,12}\?)")
+
+
+def _birthday(user_id: str) -> dict[str, Any] | None:
+    """The user's date of birth, deterministically: a form-like line in a
+    trusted email ("Дата рождения: 09.04.1997" in an HR letter) wins;
+    otherwise greetings the user received on the same day in two or more
+    years, with the year from an age mentioned in them ("29 — прекрасный
+    возраст" on 09.04.2026 → 1997). An LLM asked to derive it from mixed
+    snippets once returned 1996."""
+    with db.get_conn() as conn:
+        emails = conn.execute(
+            "SELECT date, subject, body, flags_json FROM raw_emails WHERE user_id = ? AND direction = 'in' ORDER BY date",
+            (user_id,),
+        ).fetchall()
+        messages = conn.execute(
+            "SELECT chat, date, sender, text, flags_json FROM raw_messages WHERE user_id = ? AND is_out = 0 ORDER BY date",
+            (user_id,),
+        ).fetchall()
+    for e in emails:
+        if not _security_ok(e["flags_json"]) or _unverified(e["flags_json"]):
+            continue
+        m = _BIRTHDATE_RE.search(e["body"] or "")
+        if m:
+            day, month, year = int(m.group(1)), int(m.group(2)), int(m.group(3))
+            try:
+                born = datetime(year, month, day)
+            except ValueError:
+                continue
+            return _fact(f"Дата рождения пользователя — {born:%d.%m.%Y}.", "biography", "email",
+                         f"Письмо «{e['subject']}»", (e["date"] or "")[:10], fact_type="fact")
+    by_day: dict[tuple[int, int], set[int]] = defaultdict(set)
+    ages: dict[tuple[int, int], list[int]] = defaultdict(list)
+    for r in messages:
+        if not r["text"] or not _security_ok(r["flags_json"]) or not _GREETING_RE.search(r["text"]):
+            continue
+        d = _to_dt(r["date"])
+        if not d:
+            continue
+        key = (d.month, d.day)
+        by_day[key].add(d.year)
+        for a in _AGE_IN_GREETING_RE.findall(r["text"]):
+            if 14 <= int(a) <= 90:
+                ages[key].append(d.year - int(a))
+    candidates = [k for k, years in by_day.items() if len(years) >= 2]
+    if not candidates:
+        return None
+    month, day = max(candidates, key=lambda k: (len(by_day[k]), len(ages[k])))
+    if ages[(month, day)]:
+        year = Counter(ages[(month, day)]).most_common(1)[0][0]
+        return _fact(f"Дата рождения пользователя — {day:02d}.{month:02d}.{year} (по поздравлениям в эти дни и названному возрасту).",
+                     "biography", "telegram", "Поздравления с днём рождения в Telegram", None)
+    return _fact(f"День рождения пользователя — {day:02d}.{month:02d} (год не указан; поздравления приходят в этот день).",
+                 "biography", "telegram", "Поздравления с днём рождения в Telegram", None)
 
 
 def _data_span(user_id: str) -> tuple[str | None, str | None]:
@@ -631,12 +695,18 @@ def _newsletters(user_id: str) -> list[str]:
 def build_profile(user_id: str, should_continue=lambda: True) -> dict[str, Any]:
     identity = user_identity(user_id)
     facts = _computed_facts(user_id)
+    has_birthday = any(f["content"].startswith(("Дата рождения пользователя", "День рождения пользователя")) for f in facts)
     for dimension in DIMENSIONS:
         if not should_continue():
             logger.info("profile build cancelled: user_id=%s", user_id)
             return {"cancelled": True}
         try:
-            facts.extend(_synthesize(user_id, dimension, identity["name"]))
+            synthesized = _synthesize(user_id, dimension, identity["name"])
+            if has_birthday:
+                # The computed date of birth is exact; a synthesized one (or an
+                # age "on" some date) can only contradict it.
+                synthesized = [f for f in synthesized if not _BIRTH_FACT_RE.search(f["content"])]
+            facts.extend(synthesized)
         except Exception:  # noqa: BLE001 — one failed area must not lose the rest of the profile
             logger.exception("profile synthesis failed: user_id=%s dimension=%s", user_id, dimension["key"])
     if not should_continue():

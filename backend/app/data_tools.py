@@ -133,7 +133,8 @@ def build_data_tools(user_id: str) -> list[BaseTool]:
 
     @_tool("""Регулярные ежемесячные платежи и подписки по банковским уведомлениям: что, сколько, в какой день
         месяца, когда следующее списание (next_expected) и что спишется до конца текущего месяца
-        (upcoming_this_month), плюс списания, о которых заранее предупредили письмом (announced_in_email). Используй
+        (upcoming_this_month), плюс списания, о которых заранее предупредили письмом (announced_in_email). На вопрос
+        «какие подписки спишутся до конца месяца» перечисли ВСЕ пункты SUBSCRIPTIONS_DUE_BEFORE_MONTH_END. Используй
         для «какие подписки спишутся», «автосписания», «регулярные платежи», «на что я подписан».""")
     def recurring_payments() -> dict:
         return _wrap(analytics.recurring_payments(user_id))

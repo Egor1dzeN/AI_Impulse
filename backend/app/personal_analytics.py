@@ -1338,9 +1338,27 @@ def recurring_payments(user_id: str) -> dict[str, Any]:
                           "subject": e["subject"], "email_date": (e["date"] or "")[:10],
                           "due_before_month_end": when <= month_end})
     announced.sort(key=lambda a: a["date"])
+    # One ready list for "какие подписки спишутся до конца месяца": forecast
+    # subscriptions plus charges announced by email, merged by merchant name.
+    due: dict[str, dict[str, Any]] = {}
+    for s in series:
+        if s["due_before_month_end"] and s["is_subscription"]:
+            due[_merchant_key(s["merchant"]).split()[0]] = {"what": s["merchant"], "date": s["next_expected"], "amount": s["amount"],
+                                                             "basis": f"списывается каждый месяц около {s['day_of_month']} числа"}
+    for a in announced:
+        if a["due_before_month_end"]:
+            key = _norm(a["from"] or a["subject"]).split()[0] if (a["from"] or a["subject"]) else a["date"]
+            match = next((k for k in due if k.startswith(key[:5]) or key.startswith(k[:5])), None)
+            entry = {"what": a["from"] or a["subject"], "date": a["date"], "amount": a["amount"],
+                     "basis": f"предупреждение в письме «{a['subject']}» от {a['email_date']}"}
+            if match:
+                due[match]["basis"] += "; " + entry["basis"]
+            else:
+                due[key] = entry
     return {
         "today": today.isoformat(),
         "month_end": month_end.isoformat(),
+        "SUBSCRIPTIONS_DUE_BEFORE_MONTH_END": sorted(due.values(), key=lambda x: x["date"]),
         "recurring": series,
         "upcoming_this_month": [s for s in series if s["due_before_month_end"]],
         "announced_in_email": announced,

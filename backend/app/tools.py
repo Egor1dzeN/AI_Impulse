@@ -322,10 +322,26 @@ def get_finance_summary_impl(user_id: str) -> dict[str, Any]:
             expense_by_category[row["category"]] += amount
             total_expense += amount
 
+    with db.get_conn() as conn:
+        last = conn.execute(
+            "SELECT x.balance, x.date, x.merchant FROM expenses x LEFT JOIN raw_emails e ON e.user_id = x.user_id "
+            "AND e.id = x.external_id WHERE x.user_id = ? AND x.balance IS NOT NULL "
+            "ORDER BY COALESCE(e.date, x.date) DESC LIMIT 1",
+            (user_id,),
+        ).fetchone()
+
     return {
+        # What the bank itself reported after the latest operation — THE
+        # answer to "какой у меня баланс". income − expense over the
+        # imported period is only a net flow, not money on the card.
+        "card_balance": (
+            {"value": last["balance"], "as_of": last["date"],
+             "note": "остаток по последнему банковскому уведомлению; живого доступа к счёту нет"}
+            if last else None
+        ),
         "total_expense": total_expense,
         "total_income": total_income,
-        "balance": total_income - total_expense,
+        "net_flow_income_minus_expense": total_income - total_expense,
         "by_month": dict(sorted(by_month.items())),
         "expense_by_category": dict(sorted(expense_by_category.items(), key=lambda kv: -kv[1])),
         "income_by_category": dict(sorted(income_by_category.items(), key=lambda kv: -kv[1])),
@@ -368,6 +384,55 @@ def log_weight_impl(user_id: str, value_kg: float, date: str) -> dict[str, Any]:
 
 DAILY_KCAL_GOAL = 2200
 
+_KCAL_GOAL_RE = re.compile(
+    r"(?:норм\w*|цел\w*|лимит\w*|бюджет\w*)[^.\n]{0,40}?(\d{1,2}[\s  ]?\d{3})\s*(?:ккал|kcal|калори)", re.IGNORECASE
+)
+_KCAL_GOAL_AFTER_RE = re.compile(
+    r"(\d{1,2}[\s  ]?\d{3})\s*(?:ккал|kcal)(?![^.\n]{0,15}\bпри\b)[^.\n]{0,25}(?:в день|в сутки|норм|цел)", re.IGNORECASE
+)
+_WEIGHT_RE = re.compile(
+    r"(?:\bвес\w*|вешу)\s*[:—–-]?\s*(?:сейчас\s*|составляет\s*)?(\d{2,3}(?:[.,]\d)?)\s*(?:кг|килограм)", re.IGNORECASE
+)
+
+
+def health_targets_from_data(user_id: str) -> dict[str, Any]:
+    """The daily calorie norm and body weight as the user's own imported data
+    states them (a fitness-app digest, a coach, the user's own message) — the
+    NEWEST mention wins, so a norm recalculated in September replaces the one
+    from May instead of both living side by side in memory."""
+    with db.get_conn() as conn:
+        rows = [dict(r) for r in conn.execute(
+            "SELECT date, subject || char(10) || body AS text, 'письмо «' || subject || '»' AS source FROM raw_emails "
+            "WHERE user_id = ? AND (flags_json IS NULL OR flags_json NOT LIKE '%security%')",
+            (user_id,),
+        ).fetchall()]
+        rows += [dict(r) for r in conn.execute(
+            "SELECT date, text, 'Telegram, чат ' || chat AS source FROM raw_messages WHERE user_id = ?", (user_id,)
+        ).fetchall()]
+    now_iso = personal_data.now_local(user_id).isoformat()
+    kcal: list[tuple[str, int, str]] = []
+    weight: list[tuple[str, float, str]] = []
+    for r in rows:
+        when = str(r["date"] or "")
+        if not r["text"] or when[:19] > now_iso[:19]:
+            continue
+        m = _KCAL_GOAL_RE.search(r["text"]) or _KCAL_GOAL_AFTER_RE.search(r["text"])
+        if m:
+            kcal.append((when, int(re.sub(r"\D", "", m.group(1))), r["source"]))
+        w = _WEIGHT_RE.search(r["text"])
+        if w:
+            weight.append((when, float(w.group(1).replace(",", ".")), r["source"]))
+    result: dict[str, Any] = {}
+    if kcal:
+        when, value, source = max(kcal)
+        result["kcal_goal"] = {"value": value, "date": when[:10], "source": source,
+                               "older_values": [{"value": v, "date": d[:10]} for d, v, _ in sorted(kcal)[:-1] if v != value]}
+    if weight:
+        when, value, source = max(weight)
+        result["weight"] = {"value_kg": value, "date": when[:10], "source": source,
+                            "older_values": [{"value_kg": v, "date": d[:10]} for d, v, _ in sorted(weight)[:-1] if v != value]}
+    return result
+
 
 def get_health_summary_impl(user_id: str) -> dict[str, Any]:
     with db.get_conn() as conn:
@@ -384,14 +449,24 @@ def get_health_summary_impl(user_id: str) -> dict[str, Any]:
     for row in meal_rows:
         by_day[row["date"]] += float(row["kcal"])
 
-    today = max(by_day.keys()) if by_day else None
-    today_kcal = by_day.get(today, 0.0) if today else 0.0
+    today = personal_data.now_local(user_id).date().isoformat()
+    today_kcal = by_day.get(today, 0.0)
+    targets = health_targets_from_data(user_id)
+    goal = targets.get("kcal_goal", {}).get("value")
 
     return {
-        "daily_kcal_goal": DAILY_KCAL_GOAL,
+        "daily_kcal_goal": goal or DAILY_KCAL_GOAL,
+        "daily_kcal_goal_source": (
+            f"{targets['kcal_goal']['source']} от {targets['kcal_goal']['date']} (самое свежее значение в данных)"
+            if goal else "в данных пользователя нормы нет — это значение по умолчанию, скажи об этом пользователю"
+        ),
+        "outdated_kcal_goals": targets.get("kcal_goal", {}).get("older_values", []),
+        "latest_weight_from_data": targets.get("weight"),
         "today": today,
-        "today_kcal": today_kcal,
-        "kcal_left_today": max(0.0, DAILY_KCAL_GOAL - today_kcal),
+        "logged_today_kcal": today_kcal,
+        "kcal_left_today": max(0.0, (goal or DAILY_KCAL_GOAL) - today_kcal),
+        "how_to_answer": "Если пользователь говорит, что съел N ккал, и спрашивает остаток: остаток = daily_kcal_goal − N − "
+                         "logged_today_kcal. log_meal вызывай, только если он прямо просит записать приём пищи.",
         "kcal_by_day": dict(sorted(by_day.items())),
         "weight_history": [dict(row) for row in weight_rows],
     }
@@ -1153,7 +1228,7 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
 
     @tool
     def get_finance_summary() -> dict:
-        """Получить сводку по тратам и пополнениям: итоги, баланс (пополнения минус траты), разбивка по месяцам и категориям."""
+        """Сводка по тратам и пополнениям: card_balance — остаток на карте по последнему банковскому уведомлению (это ответ на «какой у меня баланс»), итоги, чистый поток (пополнения минус траты — НЕ баланс карты), разбивка по месяцам и категориям."""
         return get_finance_summary_impl(user_id=user_id)
 
     @tool
@@ -1177,7 +1252,7 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
 
     @tool
     def get_health_summary() -> dict:
-        """Получить сводку по калориям за сегодня и динамике веса."""
+        """Сводка по питанию и весу: дневная норма калорий и текущий вес из данных пользователя (самое свежее значение; устаревшие — отдельно), записанные сегодня приёмы пищи и остаток калорий. Вызывай для вопросов про норму, остаток калорий, вес."""
         return get_health_summary_impl(user_id=user_id)
 
     @tool

@@ -16,7 +16,7 @@ from .injection_guard import UNTRUSTED_NOTE
 DATA_TOOL_NAMES = {
     "data_overview", "calendar_events", "schedule_analysis", "recurring_schedule", "search_emails",
     "get_email_thread", "inbox_overview", "search_messages", "top_contacts", "finance_report", "monthly_cashflow",
-    "proactive_suggestions",
+    "proactive_suggestions", "recurring_payments",
 }
 
 _PERIOD_HELP = (
@@ -131,6 +131,13 @@ def build_data_tools(user_id: str) -> list[BaseTool]:
     def monthly_cashflow() -> dict:
         return _wrap(analytics.monthly_cashflow(user_id))
 
+    @_tool("""Регулярные ежемесячные платежи и подписки по банковским уведомлениям: что, сколько, в какой день
+        месяца, когда следующее списание (next_expected) и что спишется до конца текущего месяца
+        (upcoming_this_month), плюс списания, о которых заранее предупредили письмом (announced_in_email). Используй
+        для «какие подписки спишутся», «автосписания», «регулярные платежи», «на что я подписан».""")
+    def recurring_payments() -> dict:
+        return _wrap(analytics.recurring_payments(user_id))
+
     @_tool("""Что ассистент сам заметил в данных пользователя и может предложить сделать: неотвеченные письма с
         горящим сроком, подозрительные письма, накладки и перегруз в календаре, конфликт с регулярными
         активностями, всплеск трат, новый доход — у каждого пункта готовое действие. Вызывай, когда пользователь
@@ -142,4 +149,5 @@ def build_data_tools(user_id: str) -> list[BaseTool]:
     return [
         data_overview, calendar_events, schedule_analysis, recurring_schedule, search_emails, get_email_thread,
         inbox_overview, search_messages, top_contacts, finance_report, monthly_cashflow, proactive_suggestions,
+        recurring_payments,
     ]

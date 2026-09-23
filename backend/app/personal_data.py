@@ -531,7 +531,12 @@ def _store_calendar(user_id: str, records: list[dict[str, Any]]) -> dict[str, An
                 # description still let its organizer/location become "facts"
                 # ("works at <attacker's studio>", "send the budget to …").
                 flagged.append({"id": e["id"], "summary": e["summary"], "reasons": reasons})
-            elif e.get("status") != "cancelled":
+            elif e.get("status") != "cancelled" and not any(not a["self"] for a in attendees):
+                # Meetings with other people are answered exactly by the
+                # calendar tools; as memory they only produced noise ("Дата
+                # события: 24 сентября") that crowded real facts out of
+                # search_memory. Personal events (birthdays, trips, own
+                # activities) still carry profile knowledge.
                 memory_records.append({**e, "description": description})
 
     # Recurring instances repeat the same fact; one per series is enough for memory.

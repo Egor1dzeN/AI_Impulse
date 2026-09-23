@@ -547,6 +547,45 @@ def replace_profile_facts(user_id: str, facts: list[dict[str, Any]]) -> int:
     return len(facts)
 
 
+_DIGEST_ORDER = ["identity", "location", "biography", "relationships", "work_goals", "health_sport", "preferences",
+                 "routine", "finance"]
+
+
+def profile_digest(user_id: str, today: "Any") -> str:
+    """The profile builder's facts as a compact block for the system prompt —
+    the verified core of the profile is always in front of the model, so a
+    question like "когда у меня день рождения" doesn't depend on which 20
+    facts a similarity search happens to return. Age is computed here, on
+    today's date, never by the model."""
+    import re as _re
+    from datetime import date as _date
+
+    facts = [m for m in get_memory_system().get_all(user_id) if (m.metadata or {}).get("generated_by") == PROFILE_BUILDER_TAG]
+    if not facts:
+        return ""
+    rank = {d: i for i, d in enumerate(_DIGEST_ORDER)}
+    facts.sort(key=lambda m: rank.get((m.metadata or {}).get("profile_dimension"), len(rank)))
+    lines = []
+    for m in facts:
+        source = m.sources[0] if m.sources else None
+        where = f" [{source.title}]" if source and source.title else ""
+        lines.append(f"- {m.content}{where}")
+    for m in facts:
+        if (m.metadata or {}).get("profile_dimension") not in ("identity", "biography"):
+            continue
+        match = _re.search(r"(?:родил\w*|рождени\w*)[^.\d]{0,20}(\d{2})\.(\d{2})\.(\d{4})", m.content)
+        if match:
+            born = _date(int(match.group(3)), int(match.group(2)), int(match.group(1)))
+            age = today.year - born.year - ((today.month, today.day) < (born.month, born.day))
+            nxt = born.replace(year=today.year)
+            if nxt < today:
+                nxt = born.replace(year=today.year + 1)
+            lines.append(f"- ВЫЧИСЛЕНО на {today:%d.%m.%Y}: пользователю {age} (полных лет); следующий день рождения "
+                         f"{nxt:%d.%m.%Y}, тогда исполнится {age + 1}.")
+            break
+    return "\n".join(lines)
+
+
 def list_memories(user_id: str) -> list[dict[str, Any]]:
     memories = _get_repository().find_by_user(
         user_id=user_id,

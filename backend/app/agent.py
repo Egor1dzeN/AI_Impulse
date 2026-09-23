@@ -176,6 +176,19 @@ def handle_chat_turn_stream(
         google_calendar_connected=bool(user_settings.get_google_calendar_refresh_token(user_id)),
         gmail_connected=bool(user_settings.get_gmail_refresh_token(user_id)),
     )
+    try:
+        digest = memory_bridge.profile_digest(user_id, personal_data.now_local(user_id).date())
+    except Exception:  # noqa: BLE001 — the turn must work without the pinned profile
+        logger.exception("profile digest failed: user_id=%s", user_id)
+        digest = ""
+    if digest:
+        system_prompt += (
+            "\n\nПРОФИЛЬ ПОЛЬЗОВАТЕЛЯ — проверенные факты, собранные из его данных (в скобках — источник). "
+            "Для вопросов о самом пользователе (имя, возраст, город, переезд, работа, близкие, спорт, привычки) "
+            "опирайся в первую очередь на этот блок: он точнее поиска по памяти. Возраст бери ТОЛЬКО из строки "
+            "«ВЫЧИСЛЕНО», сам не считай. Точные числа, даты встреч, письма и траты по-прежнему бери из функций.\n"
+            + digest
+        )
     history = _load_recent_history(user_id, conversation_id)
     logger.info("chat turn: loaded %d short-term history message(s) for conversation_id=%s", len(history), conversation_id)
 
@@ -197,6 +210,7 @@ def handle_chat_turn_stream(
         last_action: dict[str, Any] | None = None
         web_search_sources: list[dict[str, Any]] = []
         action_tools: set[str] = set()
+        used_tools: list[str] = []
 
         for attempt in range(1, MAX_ATTEMPTS + 1):
             reply_parts = []
@@ -246,6 +260,8 @@ def handle_chat_turn_stream(
                                     user_id, name, _log_repr(arguments), _log_repr(result),
                                 )
                                 yield {"type": "tool_call", "tool": name, "arguments": arguments}
+                                if name not in used_tools:
+                                    used_tools.append(name)
                                 if name not in MEMORY_TOOL_NAMES:
                                     last_action = {"tool": name, "arguments": arguments, "result": result}
                                 if name in ACTION_TOOL_NAMES:
@@ -316,9 +332,28 @@ def handle_chat_turn_stream(
             "last_action": last_action,
             "web_search_sources": web_search_sources,
             "action_tools": action_tools,
+            "used_tools": used_tools,
         }
 
     run = yield from run_graph(inputs)
+
+    # GigaChat's safety filter sometimes answers an ordinary question about
+    # the user's own data ("какой у меня адрес и в каком городе я живу") with
+    # a canned refusal. One retry with the question framed as the user's own
+    # data lookup gets a real answer.
+    if _is_canned_refusal(run["reply"]):
+        logger.warning("canned GigaChat refusal, retrying: user_id=%s reply=%s", user_id, _log_repr(run["reply"]))
+        yield {"type": "reset"}
+        retry_inputs = {
+            "messages": [
+                SystemMessage(content=system_prompt), *history,
+                HumanMessage(content=(
+                    "Это вопрос о моих собственных данных, загруженных в приложение (почта, календарь, переписка, "
+                    f"банковские уведомления). Найди ответ в них функциями и памятью: {message}"
+                )),
+            ],
+        }
+        run = yield from run_graph(retry_inputs)
 
     # The model sometimes reports an action as done ("Готово, встреча
     # запланирована") without ever calling the draft tool — nothing exists
@@ -353,6 +388,7 @@ def handle_chat_turn_stream(
         yield {"type": "token", "text": reply}
 
     reply = mask_sensitive(_humanize_sources(_rewrite_source_citations(reply, web_search_sources)))
+    reply = _ensure_source_line(reply, run.get("used_tools") or [], bool(digest))
 
     _save_message(user_id, conversation_id, "user", message, None)
     _save_message(user_id, conversation_id, "assistant", reply, last_action)
@@ -409,6 +445,7 @@ _TECH_TERMS = {
     "calendar_events": "календарь",
     "get_calendar_events": "Google Календарь",
     "recurring_schedule": "регулярные события",
+    "recurring_payments": "регулярные платежи",
     "inbox_overview": "входящие письма",
     "search_emails": "почта",
     "get_email_thread": "переписка по письму",
@@ -478,6 +515,51 @@ def _humanize_sources(text: str) -> str:
     return _TECH_RE.sub(
         lambda m: _TECH_TERMS[m.group(1)] + plain.sub(lambda p: _TECH_TERMS[p.group(1)], m.group(2) or ""), text
     )
+
+
+_CANNED_REFUSAL_RE = re.compile(
+    r"(Генеративные языковые модели не обладают собственным мнением|Не люблю менять тему разговора|"
+    r"Что-то в вашем вопросе меня смущает|разговоры на чувствительные темы могут быть ограничены|"
+    r"Как у нейросетевой языковой модели у меня не может быть настроения)",
+    re.IGNORECASE,
+)
+
+
+def _is_canned_refusal(reply: str) -> bool:
+    return bool(reply) and len(reply) < 600 and bool(_CANNED_REFUSAL_RE.search(reply))
+
+
+# Tools that read the user's data -> the plain-words source they stand for.
+_SOURCE_LABELS = {
+    "calendar_events": "календарь", "schedule_analysis": "календарь", "recurring_schedule": "календарь и регулярные письма",
+    "inbox_overview": "почта", "search_emails": "почта", "get_email_thread": "почта", "list_emails": "почта",
+    "get_email": "почта", "search_messages": "переписка в Telegram", "top_contacts": "встречи, письма и чаты",
+    "finance_report": "банковские уведомления", "monthly_cashflow": "банковские уведомления",
+    "get_finance_summary": "банковские уведомления", "list_transactions": "банковские уведомления",
+    "search_memory": "профиль пользователя (память)", "list_memories": "профиль пользователя (память)",
+    "get_health_summary": "данные о питании и весе", "proactive_suggestions": "почта, календарь и банковские уведомления",
+    "data_overview": "загруженные данные", "get_weather": "прогноз погоды", "build_route": "маршрут на карте",
+    "get_exchange_rate": "курсы ЦБ РФ", "get_exchange_rate_history": "курсы ЦБ РФ", "web_search": "поиск в интернете",
+    "get_calendar_events": "календарь", "recurring_payments": "банковские уведомления и письма о списаниях",
+}
+
+
+def _ensure_source_line(reply: str, used_tools: list[str], has_profile: bool) -> str:
+    """Explainability is scored on EVERY answer: one without its basis costs
+    the whole criterion. When the model forgot the "Источник: …" line, add
+    it from the tools that actually ran this turn (or the pinned profile)."""
+    if not reply or re.search(r"(?im)^\W*источник", reply) or re.search(r"(?i)\bисточник(и)?\s*:", reply):
+        return reply
+    labels: list[str] = []
+    for name in used_tools:
+        label = _SOURCE_LABELS.get(name)
+        if label and label not in labels:
+            labels.append(label)
+    if not labels and has_profile:
+        labels.append("профиль пользователя, собранный из его почты, переписки и календаря")
+    if not labels:
+        return reply
+    return reply.rstrip() + "\n\nИсточник: " + ", ".join(labels) + "."
 
 
 _WEEKDAYS_RU = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]

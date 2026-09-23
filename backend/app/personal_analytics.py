@@ -463,6 +463,7 @@ def recurring_schedule(user_id: str) -> dict[str, Any]:
     """Regular activities: recurring calendar series plus repeating patterns
     visible only in email (e.g. weekly booking confirmations)."""
     tz = user_timezone(user_id)
+    now = now_local(user_id)
     occ = _occurrences(user_id, datetime(1970, 1, 1, tzinfo=tz), datetime(2100, 1, 1, tzinfo=tz))
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for o in occ:
@@ -480,9 +481,27 @@ def recurring_schedule(user_id: str) -> dict[str, Any]:
         weeks = {o["start"].isocalendar()[:2] for o in items}
         if len(weeks) < 2 and not items[0]["series_id"]:
             continue
+        # Weekly vs every other week: the gap between consecutive occurrences
+        # on the same weekday (a biweekly 1:1 read as "every Thursday" gave a
+        # wrong next date).
+        gaps = []
+        for d in weekdays:
+            days = sorted(o["start"].date() for o in items if o["start"].weekday() == d)
+            gaps += [(b - a).days for a, b in zip(days, days[1:])]
+        gaps.sort()
+        interval_weeks = max(1, round(gaps[len(gaps) // 2] / 7)) if gaps else 1
+        if len(weekdays) == 5 and weekdays == [0, 1, 2, 3, 4] and interval_weeks == 1:
+            frequency = "каждый будний день"
+        elif interval_weeks == 1:
+            frequency = "каждую неделю"
+        else:
+            frequency = f"раз в {interval_weeks} недели" if interval_weeks < 5 else f"раз в {interval_weeks} недель"
+        upcoming = [o for o in items if o["start"] > now]
         calendar_series.append({
             "summary": items[0]["summary"],
             "weekdays": [WEEKDAYS_RU[d] for d in weekdays],
+            "frequency": frequency,
+            "next": (f"{upcoming[0]['start']:%d.%m.%Y} ({WEEKDAYS_RU[upcoming[0]['start'].weekday()]})" if upcoming else None),
             "time": times.most_common(1)[0][0],
             "occurrences": len(items),
             "first": items[0]["start"].date().isoformat(),
@@ -541,7 +560,11 @@ def _email_patterns(user_id: str) -> list[dict[str, Any]]:
             for t in set(re.findall(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", r["subject"] or "")) or set(re.findall(r"\b([01]?\d|2[0-3]):([0-5]\d)\b", text)):
                 time_counter[f"{int(t[0]):02d}:{t[1]}"] += 1
         dates = sorted(r["date"] for r in items if r["date"])
+        today = now_local(user_id).date()
+        regular_days = [WEEKDAYS_RU.index(d) for d, n in weekday_counter.items() if n >= 2]
+        upcoming = sorted(today + timedelta(days=k) for k in range(1, 8) if (today + timedelta(days=k)).weekday() in regular_days)
         patterns.append({
+            "next_dates": [f"{d:%d.%m} ({WEEKDAYS_RU[d.weekday()]})" for d in upcoming],
             "sender": f"{items[0]['from_name']} <{sender}>",
             "subject_example": items[-1]["subject"],
             "count": len(items),
@@ -770,6 +793,11 @@ def search_emails(
     date_to: str | None = None, sender: str | None = None, direction: str | None = None, limit: int = 10,
 ) -> dict[str, Any]:
     rows = _email_rows(user_id)
+    keys = _thread_keys(rows)
+    replies: dict[str, list[str]] = defaultdict(list)
+    for r in rows:
+        if r["direction"] == "out":
+            replies[keys[r["id"]]].append(r["date"] or "")
     if period or date_from or date_to:
         start, end = resolve_period(user_id, period, date_from, date_to)
         rows = [r for r in rows if r["date"] and start.isoformat() <= r["date"][:10] <= end.isoformat()]
@@ -792,8 +820,19 @@ def search_emails(
     else:
         rows = sorted(rows, key=lambda r: r["date"] or "", reverse=True)
     limit = max(1, min(limit, 30))
-    return {"query": query, "total_matches": len(rows),
-            "emails": [_email_public(r, terms) for r in rows[:limit]]}
+    emails = []
+    for r in rows[:limit]:
+        item = _email_public(r, terms)
+        if r["direction"] == "in":
+            # "Я ответил X на письмо про Y?" — answered only if the user wrote
+            # in THIS thread after it; a reply to another letter from the
+            # same person doesn't count.
+            item["user_replied"] = any(d > (r["date"] or "") for d in replies.get(keys[r["id"]], []))
+        else:
+            item["written_by_user"] = True
+        emails.append(item)
+    return {"query": query, "total_matches": len(rows), "emails": emails,
+            "note": "user_replied относится только к этому конкретному письму (ответ в той же ветке)."}
 
 
 def get_email_thread(user_id: str, email_id: str) -> dict[str, Any]:
@@ -1107,12 +1146,14 @@ def finance_report(
     by_category: dict[str, float] = defaultdict(float)
     by_month_category: dict[str, dict[str, float]] = defaultdict(lambda: defaultdict(float))
     by_merchant: dict[str, float] = defaultdict(float)
+    merchant_count: Counter[str] = Counter()
     for r in rows:
         month = r["date"][:7]
         by_month[month] += r["amount"]
         by_category[r["category"]] += r["amount"]
         by_month_category[month][r["category"]] += r["amount"]
         by_merchant[r["merchant"] or r["note"] or "—"] += r["amount"]
+        merchant_count[r["merchant"] or r["note"] or "—"] += 1
 
     result = {
         "period": _period_payload(start, end) if period != "all" or date_from or date_to else "весь период данных",
@@ -1123,7 +1164,8 @@ def finance_report(
         "by_month": {k: round(v, 2) for k, v in sorted(by_month.items())},
         "by_category": {k: round(v, 2) for k, v in sorted(by_category.items(), key=lambda kv: -kv[1])},
         "by_month_and_category": {m: {c: round(v, 2) for c, v in cats.items()} for m, cats in sorted(by_month_category.items())},
-        "top_merchants": [{"merchant": k, "total": round(v, 2)} for k, v in sorted(by_merchant.items(), key=lambda kv: -kv[1])[:10]],
+        "top_merchants": [{"merchant": k, "total": round(v, 2), "count": merchant_count[k]}
+                          for k, v in sorted(by_merchant.items(), key=lambda kv: -kv[1])[:10]],
         "categories_available": [c for c, _ in all_categories.most_common()],
     }
     if len(rows) <= 40:
@@ -1181,8 +1223,16 @@ def monthly_cashflow(user_id: str) -> dict[str, Any]:
         })
     sources.sort(key=lambda s: -s["total"])
 
+    one_off = {s["source"] for s in sources if not s["regular"]}
+    regular_net = []
+    for m in complete_rows:
+        extra = sum(r["amount"] for r in rows if r["type"] == "income" and r["date"][:7] == m["month"]
+                    and _income_source(r) in one_off)
+        regular_net.append(m["net"] - extra)
+
     return {
         "today": today.isoformat(),
+        "average_net_without_one_off_income": round(sum(regular_net) / len(regular_net), 2) if regular_net else None,
         "months": table,
         "complete_months_used_for_average": [m["month"] for m in complete_rows],
         "average_per_complete_month": {"income": avg("income"), "expense": avg("expense"), "net": avg("net")},
@@ -1192,3 +1242,113 @@ def monthly_cashflow(user_id: str) -> dict[str, Any]:
                 "среднее не входит. one_off_or_new_income — поступления, которые были только в одном месяце "
                 "(разовые или новые источники).",
     }
+
+
+# ============================================================
+# Recurring payments / subscriptions
+# ============================================================
+
+_UPCOMING_CHARGE_RE = re.compile(
+    r"(?:будет списан\w*|спишется|спишем|автопродлени\w*|продлится|продлени\w* подписки)[^\n]{0,120}?"
+    r"(?P<amount>\d{1,3}(?:[\s  ]\d{3})*(?:[.,]\d{1,2})?)\s?(?:₽|руб)",
+    re.IGNORECASE,
+)
+_DATE_IN_TEXT_RE = re.compile(r"\b(\d{1,2})\.(\d{1,2})(?:\.(\d{2,4}))?\b")
+
+
+def _merchant_key(name: str) -> str:
+    return re.sub(r"\s+", " ", re.split(r"\s[—–-]\s", _norm(name))[0]).strip()
+
+
+def recurring_payments(user_id: str) -> dict[str, Any]:
+    """Monthly charges that repeat (subscriptions, rent, utilities, phone):
+    typical day and amount, when the next one is due, and which fall due
+    before the end of the current month; plus upcoming charges announced in
+    email ("22.09 будет списано 449 ₽")."""
+    today = now_local(user_id).date()
+    month_end = _month_bounds(today.year, today.month)[1]
+    rows = [r for r in _transactions(user_id) if r["type"] == "expense"]
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for r in rows:
+        groups[_merchant_key(r["merchant"] or r["note"] or "")].append(r)
+
+    series = []
+    for key, items in groups.items():
+        if not key:
+            continue
+        months = sorted({r["date"][:7] for r in items})
+        if len(months) < 2 or len(items) > len(months) + 1:
+            continue  # not monthly: a coffee shop or a weekly pool visit
+        amounts = [r["amount"] for r in items]
+        days = sorted(int(r["date"][8:10]) for r in items)
+        typical_day = days[len(days) // 2]
+        if max(days) - min(days) > 4 or max(amounts) > 1.5 * min(amounts):
+            continue
+        if re.search(r"кафе|кофе|ресторан|продукт|супермаркет|транспорт|такси|покупк|аптек", _norm(items[-1]["category"] or "")):
+            continue  # everyday spending that happened to land on similar days
+        last = max(items, key=lambda r: r["date"])
+        y, m = today.year, today.month
+        due_day = min(typical_day, _month_bounds(y, m)[1].day)
+        nxt = date(y, m, due_day)
+        if nxt <= today or last["date"][:7] == today.strftime("%Y-%m"):
+            y, m = (y + (m == 12), 1 if m == 12 else m + 1)
+            nxt = date(y, m, min(typical_day, _month_bounds(y, m)[1].day))
+        is_subscription = bool(re.search(r"подписк|subscription|plus|плюс|premium|cloud|музык|кино|storytel|okko|ivi|spotify",
+                                         _norm(f"{last['merchant']} {last['category']}")))
+        series.append({
+            "merchant": last["merchant"] or last["note"],
+            "category": last["category"],
+            "is_subscription": is_subscription or _norm(last["category"]) in ("подписки", "subscriptions"),
+            "amount": last["amount"],
+            "day_of_month": typical_day,
+            "months_seen": len(months),
+            "last_charge": last["date"],
+            "next_expected": nxt.isoformat(),
+            "due_before_month_end": today < nxt <= month_end,
+        })
+    series.sort(key=lambda s: s["next_expected"])
+
+    announced = []
+    with db.get_conn() as conn:
+        mails = conn.execute(
+            "SELECT id, date, from_name, subject, body, flags_json FROM raw_emails WHERE user_id = ? AND direction = 'in'",
+            (user_id,),
+        ).fetchall()
+    for e in mails:
+        if _security(e["flags_json"]):
+            continue
+        text = f"{e['subject']}\n{e['body']}"
+        match = _UPCOMING_CHARGE_RE.search(text)
+        if not match:
+            continue
+        when = None
+        for d in _DATE_IN_TEXT_RE.finditer(text):
+            try:
+                year = int(d.group(3)) if d.group(3) else today.year
+                year = year + 2000 if year < 100 else year
+                cand = date(year, int(d.group(2)), int(d.group(1)))
+            except ValueError:
+                continue
+            if cand >= today:
+                when = cand
+                break
+        if when is None:
+            continue
+        announced.append({"date": when.isoformat(), "amount": _to_num(match.group("amount")), "from": e["from_name"],
+                          "subject": e["subject"], "email_date": (e["date"] or "")[:10],
+                          "due_before_month_end": when <= month_end})
+    announced.sort(key=lambda a: a["date"])
+    return {
+        "today": today.isoformat(),
+        "month_end": month_end.isoformat(),
+        "recurring": series,
+        "upcoming_this_month": [s for s in series if s["due_before_month_end"]],
+        "announced_in_email": announced,
+        "note": "recurring — ежемесячные списания, найденные по банковским уведомлениям (next_expected — прогноз "
+                "по обычному дню месяца). announced_in_email — списания, о которых заранее предупредили письмом. "
+                "«Подписки до конца месяца» = is_subscription из upcoming_this_month плюс announced_in_email.",
+    }
+
+
+def _to_num(value: str) -> float:
+    return float(re.sub(r"[\s  ]", "", value).replace(",", "."))

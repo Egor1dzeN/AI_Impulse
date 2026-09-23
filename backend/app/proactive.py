@@ -52,6 +52,12 @@ def _email_items(user_id: str) -> list[dict[str, Any]]:
     return items
 
 
+def _place(location: str) -> str:
+    """Address without the venue suffix, lowercased — two rooms in one office are one place."""
+    parts = [p.strip().lower() for p in location.split(",") if p.strip()]
+    return ", ".join(parts[:3])
+
+
 def _calendar_items(user_id: str) -> list[dict[str, Any]]:
     items = []
     tz = user_timezone(user_id)
@@ -67,6 +73,17 @@ def _calendar_items(user_id: str) -> list[dict[str, Any]]:
                 f"{a['start']:%H:%M}–{a['end']:%H:%M} пересекается с {b['start']:%H:%M}–{b['end']:%H:%M}.",
                 "Перенести одну из встреч — подготовлю изменение в календаре на подтверждение.",
                 f"Завтра накладка между «{a['summary']}» и «{b['summary']}» — что лучше перенести?", "календарь",
+            ))
+    # Back-to-back meetings at different addresses: not enough time to get there.
+    for a, b in zip(timed, timed[1:]):
+        loc_a, loc_b = (a["location"] or "").strip(), (b["location"] or "").strip()
+        gap = (b["start"] - a["end"]).total_seconds() / 60
+        if loc_a and loc_b and _place(loc_a) != _place(loc_b) and 0 <= gap < 30:
+            items.append(_item(
+                "high", "travel", f"Завтра можно не успеть доехать: «{a['summary']}» → «{b['summary']}»",
+                f"{a['end']:%H:%M} заканчивается на {loc_a}, в {b['start']:%H:%M} начало на {loc_b} — на дорогу {int(gap)} мин.",
+                "Проверить маршрут и предупредить участников / сдвинуть вторую встречу — изменение только после подтверждения.",
+                f"Успею ли я завтра с «{a['summary']}» на «{b['summary']}»?", "календарь",
             ))
     for o in timed:
         if (o["importance"] or "") == "critical":
@@ -122,10 +139,16 @@ def _finance_items(user_id: str) -> list[dict[str, Any]]:
         report = analytics.finance_report(user_id, date_from=f"{previous[0]}-01", date_to=f"{last}-31")
         by_month = report["by_month_and_category"]
         categories = {c for m in by_month.values() for c in m}
+        spikes = []
         for category in sorted(categories):
+            present = [m for m in previous if by_month.get(m, {}).get(category, 0) > 0]
             base = sum(by_month.get(m, {}).get(category, 0) for m in previous) / len(previous)
             current = by_month.get(last, {}).get(category, 0)
-            if base > 0 and current >= 1.8 * base and current - base >= 2000:
+            # A regular category (spent in most previous months) that jumped —
+            # not a one-off purchase in a category seen once before.
+            if len(present) >= max(2, len(previous) - 1) and base > 0 and current >= 1.8 * base and current - base >= 2000:
+                spikes.append((current - base, category, base, current))
+        for _, category, base, current in sorted(spikes, reverse=True):
                 items.append(_item(
                     "medium", "finance", f"Траты на «{category}» выросли в {current / base:.1f} раза",
                     f"{last}: {current:,.0f} ₽ против среднего {base:,.0f} ₽ за {previous[0]}–{previous[-1]}.".replace(",", " "),
@@ -160,4 +183,14 @@ def scan(user_id: str, limit: int = 6) -> dict[str, Any]:
         except Exception:  # noqa: BLE001 — one detector failing must not hide the others
             logger.exception("proactive detector %s failed for user_id=%s", detector.__name__, user_id)
     items.sort(key=lambda i: _PRIORITY[i["priority"]])
-    return {"now": now_local(user_id).isoformat(), "count": len(items), "suggestions": items[:limit]}
+    # Diverse first: the best item of every kind (email, security, calendar,
+    # travel, routine, finance) before a second one of any kind — otherwise
+    # four unanswered emails hide the calendar clash and the budget spike.
+    picked, seen_kinds = [], set()
+    for item in items:
+        if item["kind"] not in seen_kinds:
+            picked.append(item)
+            seen_kinds.add(item["kind"])
+    picked += [i for i in items if i not in picked]
+    picked = sorted(picked[:limit], key=lambda i: _PRIORITY[i["priority"]])
+    return {"now": now_local(user_id).isoformat(), "count": len(items), "suggestions": picked}

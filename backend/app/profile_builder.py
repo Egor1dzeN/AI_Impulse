@@ -90,6 +90,9 @@ _SYSTEM_PROMPT = (
     "- Никаких догадок и выводов «по контексту»: пиши факт, только если он прямо сказан во фрагментах. Роли людей "
     "(руководитель, партнёр, родственник) — только если так прямо названы.\n"
     "- Один факт — одно короткое предложение на русском, начинай с «Пользователь …» или «Пользователя …».\n"
+    "- Если значение менялось (вес, норма калорий, цель, должность, адрес) — пиши ТОЛЬКО самое свежее по дате "
+    "фрагмента и укажи дату («на 07.09.2026 вес пользователя — 57,8 кг»); старое значение как текущее не пиши.\n"
+    "- Возраст отдельным фактом не пиши — только дату рождения (возраст считается на текущую дату).\n"
     "- valid_from / valid_until — период, когда факт верен (YYYY-MM-DD), если он виден из данных, иначе null.\n"
     "Ответь ТОЛЬКО JSON-массивом без пояснений: "
     '[{"fact": "...", "evidence": ["T3", "E1"], "valid_from": null, "valid_until": null, "confidence": 0.9}]. '
@@ -158,7 +161,13 @@ def _email_evidence(user_id: str, pattern: re.Pattern[str]) -> list[dict[str, An
     # another company". Such mail never reaches profile synthesis.
     hits = [r for r in rows if _security_ok(r["flags_json"]) and not _unverified(r["flags_json"])
             and pattern.search(f"{r['subject']}\n{r['body']}".lower())]
-    return _even_sample(hits, MAX_EMAIL_EVIDENCE)
+    # The newest letters always make it in: a monthly digest from September
+    # must win over the one from May (an even sample once picked only the
+    # older letter, and a stale calorie norm/weight became "the" fact).
+    if len(hits) <= MAX_EMAIL_EVIDENCE:
+        return hits
+    half = MAX_EMAIL_EVIDENCE // 2
+    return _even_sample(hits[:-half], MAX_EMAIL_EVIDENCE - half) + hits[-half:]
 
 
 def _format_evidence(messages: list[dict[str, Any]], emails: list[dict[str, Any]], own_name: str | None) -> tuple[str, dict[str, dict[str, Any]]]:
@@ -372,6 +381,8 @@ def _computed_facts(user_id: str) -> list[dict[str, Any]]:
         ))
 
     facts.extend(_finance_facts(user_id))
+    facts.extend(_health_facts(user_id))
+    facts.extend(_calendar_birthdays(user_id))
     facts.extend(_routine_facts(user_id))
     facts.extend(_contact_facts(user_id, *overview_dates))
 
@@ -473,13 +484,65 @@ def _finance_facts(user_id: str) -> list[dict[str, Any]]:
     return facts
 
 
+def _health_facts(user_id: str) -> list[dict[str, Any]]:
+    """The newest calorie norm / weight stated in the data — deterministic, so
+    a stale value from an older digest can't win."""
+    from .tools import health_targets_from_data
+
+    targets = health_targets_from_data(user_id)
+    facts = []
+    if "kcal_goal" in targets:
+        g = targets["kcal_goal"]
+        old = ", ".join(f"{o['value']} ккал на {o['date']}" for o in g["older_values"])
+        facts.append(_fact(
+            f"Актуальная дневная норма калорий пользователя — {g['value']} ккал (на {g['date']}, {g['source']})"
+            + (f"; устаревшие значения: {old}." if old else "."),
+            "health_sport", "email" if g["source"].startswith("письмо") else "telegram", g["source"], g["date"],
+        ))
+    if "weight" in targets:
+        w = targets["weight"]
+        old = ", ".join(f"{o['value_kg']} кг на {o['date']}" for o in w["older_values"])
+        facts.append(_fact(
+            f"Актуальный вес пользователя — {w['value_kg']:g} кг (на {w['date']}, {w['source']})"
+            + (f"; раньше: {old}." if old else "."),
+            "health_sport", "email" if w["source"].startswith("письмо") else "telegram", w["source"], w["date"],
+            fact_type="state",
+        ))
+    return facts
+
+
+_BIRTHDAY_RE = re.compile(r"(?i)(день рождения|\bдр\b|днюх|birthday|юбилей)")
+
+
+def _calendar_birthdays(user_id: str) -> list[dict[str, Any]]:
+    """Birthdays the user keeps in the calendar ("День рождения мамы") —
+    one fact per person, with the day and month."""
+    with db.get_conn() as conn:
+        rows = conn.execute(
+            "SELECT summary, start FROM raw_calendar_events WHERE user_id = ? AND status != 'cancelled'", (user_id,)
+        ).fetchall()
+    seen: set[str] = set()
+    facts = []
+    for r in sorted(rows, key=lambda r: r["start"] or ""):
+        summary = (r["summary"] or "").strip()
+        if not _BIRTHDAY_RE.search(summary) or not r["start"] or summary.lower() in seen:
+            continue
+        seen.add(summary.lower())
+        day = r["start"][:10]
+        facts.append(_fact(
+            f"В календаре пользователя: «{summary}» — {day[8:10]}.{day[5:7]} (ближайшая дата {day[8:10]}.{day[5:7]}.{day[:4]}).",
+            "relationships", "calendar", f"Календарь: {summary}", day,
+        ))
+    return facts[:10]
+
+
 def _routine_facts(user_id: str) -> list[dict[str, Any]]:
     schedule = analytics.recurring_schedule(user_id)
     facts = []
     for s in schedule["calendar_series"][:8]:
         days = ", ".join(s["weekdays"])
         facts.append(_fact(
-            f"Регулярное событие в календаре пользователя: «{s['summary']}» — {days}, {s['time']} "
+            f"Регулярное событие в календаре пользователя: «{s['summary']}» — {s.get('frequency', '')}, {days}, {s['time']} "
             f"({s['occurrences']} раз с {s['first']} по {s['last']}).",
             "routine", "calendar", f"Календарь: {s['summary']}", s["first"], s["last"], fact_type="procedure",
         ))

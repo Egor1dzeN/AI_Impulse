@@ -157,7 +157,7 @@ async def transcribe(
 
 @app.get("/api/proactive")
 def proactive_suggestions(user_id: str = Depends(auth.get_current_user_id)) -> dict:
-    return mask_obj(proactive.scan(user_id, limit=4))
+    return mask_obj(proactive.scan(user_id, limit=6))
 
 
 MAX_DOCUMENT_BYTES = 15 * 1024 * 1024

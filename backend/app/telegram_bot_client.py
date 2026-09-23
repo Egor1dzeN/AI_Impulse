@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import secrets
 import sqlite3
 import string
@@ -12,7 +13,7 @@ import requests
 
 TELEGRAM_API = "https://api.telegram.org"
 
-TELEGRAM_BOT_TOKEN = "8926872747:AAEA6fqG42OhXhrKhNvczJ-TNkPWYwvN_1s"
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
 
 class TelegramBotError(RuntimeError):
@@ -62,7 +63,7 @@ class TelegramBotClient:
         timeout: int = 20,
     ) -> None:
         if not token or token == "ВСТАВЬ_НОВЫЙ_ТОКЕН_СЮДА":
-            raise ValueError("Укажи токен в telegram_bot_client.py")
+            raise ValueError("TELEGRAM_BOT_TOKEN не задан — добавь его в backend/.env")
 
         self.config = TelegramConfig(token=token, db_path=db_path, timeout=timeout)
         self.base_url = f"{TELEGRAM_API}/bot{token}"

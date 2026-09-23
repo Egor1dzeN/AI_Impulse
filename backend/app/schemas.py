@@ -120,6 +120,7 @@ class CalendarActionRequest(BaseModel):
     start_time: str | None = None
     duration_minutes: int | None = None
     notes: str | None = None
+    attendees: list[str] | None = None  # create only: invitee emails
 
 
 class UpdateSettingsRequest(BaseModel):

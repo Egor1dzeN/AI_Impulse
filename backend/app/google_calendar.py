@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import os
+import re
 from datetime import datetime, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 import requests
 
@@ -25,6 +27,7 @@ EVENTS_ENDPOINT = "https://www.googleapis.com/calendar/v3/calendars/primary/even
 # session decision to hardcode Europe/Moscow rather than read it from the
 # Google account, which would need an extra Calendar API settings call.
 TIMEZONE = "Europe/Moscow"
+MOSCOW_TZ = ZoneInfo(TIMEZONE)
 
 
 def google_calendar_is_configured() -> bool:
@@ -155,12 +158,62 @@ def list_events(refresh_token: str, date: str, days: int = 1) -> list[dict[str, 
     return events
 
 
+def _title_tokens(title: str) -> set[str]:
+    # Crude stemming (first 5 letters) so "с Евгением Лариным" and
+    # "с Лариным" / "Ларин" still overlap across differently worded requests.
+    return {w[:5] for w in re.findall(r"[\w:]+", (title or "").casefold()) if len(w) > 1}
+
+
+def find_duplicate_event(refresh_token: str, summary: str, start_iso: str) -> dict[str, Any] | None:
+    """An event already on the calendar that this create would duplicate:
+    same start minute and a similar title. The same request made again in a
+    new chat produces a new draft_id, so action_already_done() alone can't
+    catch it — the brief requires exactly one object after two runs."""
+    access_token = _get_access_token(refresh_token)
+    start_dt = datetime.fromisoformat(start_iso)
+    resp = requests.get(
+        EVENTS_ENDPOINT,
+        headers={"Authorization": f"Bearer {access_token}"},
+        params={
+            "timeMin": f"{(start_dt - timedelta(minutes=1)).isoformat()}+03:00",
+            "timeMax": f"{(start_dt + timedelta(minutes=1)).isoformat()}+03:00",
+            "singleEvents": "true",
+            "maxResults": 20,
+        },
+        timeout=10,
+    )
+    resp.raise_for_status()
+
+    wanted = _title_tokens(summary)
+    for item in resp.json().get("items", []):
+        start = (item.get("start") or {}).get("dateTime")
+        if not start:
+            continue
+        # Compare in Moscow local time (start_iso is naive Moscow time).
+        existing_start = datetime.fromisoformat(start.replace("Z", "+00:00"))
+        if existing_start.tzinfo is not None:
+            existing_start = existing_start.astimezone(MOSCOW_TZ).replace(tzinfo=None)
+        if existing_start.replace(second=0, microsecond=0) != start_dt.replace(second=0, microsecond=0):
+            continue
+        existing = _title_tokens(item.get("summary", ""))
+        overlap = len(wanted & existing) / max(1, min(len(wanted), len(existing)))
+        if overlap >= 0.6:
+            return {
+                "id": item.get("id"),
+                "summary": item.get("summary"),
+                "start": start,
+                "html_link": item.get("htmlLink"),
+            }
+    return None
+
+
 def create_event(
     refresh_token: str,
     summary: str,
     start_iso: str,
     duration_minutes: int = 30,
     description: str | None = None,
+    attendees: list[str] | None = None,
 ) -> dict[str, Any]:
     """Create a Google Calendar event acting as a reminder: a popup
     notification fires exactly at `start_iso` (Europe/Moscow local time, no
@@ -184,10 +237,15 @@ def create_event(
             "overrides": [{"method": "popup", "minutes": 0}],
         },
     }
+    if attendees:
+        body["attendees"] = [{"email": email} for email in attendees]
 
     resp = requests.post(
         EVENTS_ENDPOINT,
         headers={"Authorization": f"Bearer {access_token}"},
+        # The user already confirmed the card listing these attendees, so
+        # Google should actually send them the invitation.
+        params={"sendUpdates": "all"} if attendees else None,
         json=body,
         timeout=10,
     )
@@ -197,6 +255,7 @@ def create_event(
         "id": event.get("id"),
         "summary": event.get("summary"),
         "start": start_iso,
+        "attendees": [a.get("email") for a in event.get("attendees") or []],
         "html_link": event.get("htmlLink"),
     }
 

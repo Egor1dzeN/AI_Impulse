@@ -4,12 +4,21 @@ import Chat from './components/Chat';
 import Composer from './components/Composer';
 import MemoryPanel from './components/MemoryPanel';
 import FinancePanel from './components/FinancePanel';
-import ImportPanel from './components/ImportPanel';
 import ChatList from './components/ChatList';
 import SettingsPanel from './components/SettingsPanel';
 import Menu from './components/Menu';
 import Login from './components/Login';
-import { createConversation, fetchConversations, fetchHistory, fetchProactive, sendChat } from './lib/api';
+import {
+  createConversation,
+  extractDocument,
+  fetchConversations,
+  fetchHistory,
+  fetchImportProgress,
+  fetchProactive,
+  importData,
+  sendChat,
+} from './lib/api';
+import { datasetNote } from './lib/attachments';
 import { getUsername, isAuthenticated, logout } from './lib/auth';
 import { getReasoningEnabled, setReasoningEnabled } from './lib/settings';
 import { useI18n } from './lib/i18n.jsx';
@@ -17,17 +26,22 @@ import './styles.css';
 
 const uid = () => Math.random().toString(36).slice(2);
 
+// How long the memory card "thinks" over an attached dataset before
+// announcing what it found — the import itself starts immediately.
+const MEMORY_CARD_THINKING_MS = 10000;
+
 export default function App() {
   const { t } = useI18n();
   const CHIPS = t('chips');
   const [authed, setAuthed] = useState(isAuthenticated);
   const [messages, setMessages] = useState([]);
+  const [memoryProgress, setMemoryProgress] = useState(null); // /api/import/progress while memory is filling
+  const progressPollRef = useRef(null);
   const [input, setInput] = useState('');
   const [busy, setBusy] = useState(false);
   const [isChat, setIsChat] = useState(false);
   const [memoryOpen, setMemoryOpen] = useState(false);
   const [financeOpen, setFinanceOpen] = useState(false);
-  const [importOpen, setImportOpen] = useState(false);
   const [chatListOpen, setChatListOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [conversationId, setConversationId] = useState(null);
@@ -136,22 +150,114 @@ export default function App() {
     dock.style.setProperty('--lift', Math.max(0, Math.round(gap)) + 'px');
   }
 
+  // Polls the background memory filling (profile build + fact extraction)
+  // until it finishes, then marks the chat's "saving to memory" cards done.
+  // Also runs once on login, picking an unfinished import back up after a
+  // page reload.
+  function pollMemoryProgress() {
+    clearTimeout(progressPollRef.current);
+    fetchImportProgress()
+      .then((p) => {
+        if (p.active) {
+          setMemoryProgress(p);
+          progressPollRef.current = setTimeout(pollMemoryProgress, 1500);
+        } else {
+          setMemoryProgress(null);
+          setMessages((prev) =>
+            prev.map((m) => (m.kind === 'memory' && m.status === 'saving' ? { ...m, status: 'done' } : m))
+          );
+        }
+      })
+      .catch(() => {
+        progressPollRef.current = setTimeout(pollMemoryProgress, 3000);
+      });
+  }
+
+  useEffect(() => {
+    if (!authed) return;
+    pollMemoryProgress();
+    return () => clearTimeout(progressPollRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authed]);
+
+  // Dataset files (email / Telegram / calendar exports) always go through
+  // the full import pipeline into long-term memory; the chat shows it as
+  // the assistant noticing personal data in the file. Returns the text to
+  // pass on to the model: a short note per loaded file, or — for a JSON
+  // that turned out not to be a dataset (422) — its document block.
+  async function loadDatasets(datasets, cardId) {
+    let imported = false;
+    const thinking = new Promise((resolve) => setTimeout(resolve, MEMORY_CARD_THINKING_MS)).then(() => {
+      // A slow import outlasts the pause — keep showing it's being read.
+      if (!imported) updateMessage(cardId, { status: 'importing' });
+    });
+    const notes = [];
+    const failed = [];
+    let records = 0;
+    for (const a of datasets) {
+      try {
+        const res = await importData({ file: a.file });
+        records += res.imported;
+        notes.push(datasetNote(a.name, t(`composer.source_${res.source}`), res.imported));
+      } catch (err) {
+        if (err.status === 422) {
+          try {
+            notes.push((await extractDocument(a.file)).block);
+          } catch {
+            failed.push(a.name);
+          }
+        } else {
+          failed.push(a.name);
+        }
+      }
+    }
+    imported = true;
+    await thinking;
+    updateMessage(cardId, records ? { status: 'saving', records, failed } : { status: 'error', failed });
+    if (records) pollMemoryProgress();
+    return notes;
+  }
+
   function updateMessage(id, patch) {
     setMessages((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)));
   }
 
-  async function send(text) {
-    text = text.trim();
-    if (!text || busy) return;
+  async function send(rawText, attachments = []) {
+    const text = (rawText || '').trim();
+    if ((!text && !attachments.length) || busy) return;
 
     if (!isChat) setIsChat(true);
 
-    setMessages((prev) => [...prev, { id: uid(), role: 'you', content: text, status: 'done' }]);
+    const datasets = attachments.filter((a) => a.kind === 'dataset');
+    const documentBlocks = attachments.filter((a) => a.kind !== 'dataset').map((a) => a.content);
+
+    setMessages((prev) => [
+      ...prev,
+      { id: uid(), role: 'you', content: text, files: attachments.map((a) => a.name), status: 'done' },
+    ]);
     setSendTick((t) => t + 1);
     setInput('');
     setBusy(true);
     orbRef.current?.setEnergy(1);
     abortedRef.current = false;
+
+    let datasetNotes = [];
+    if (datasets.length) {
+      const cardId = uid();
+      setMessages((prev) => [
+        ...prev,
+        { id: cardId, role: 'ai', kind: 'memory', files: datasets.map((a) => a.name), status: 'thinking' },
+      ]);
+      datasetNotes = await loadDatasets(datasets, cardId);
+    }
+
+    // A bare file upload needs no model reply — the memory card is the answer.
+    if (!text && !documentBlocks.length) {
+      setBusy(false);
+      orbRef.current?.setEnergy(0);
+      return;
+    }
+    const outgoing = [text, ...documentBlocks, ...datasetNotes].filter(Boolean).join('\n\n');
 
     const aiId = uid();
     setMessages((prev) => [...prev, { id: aiId, role: 'ai', content: '', status: 'thinking' }]);
@@ -169,11 +275,16 @@ export default function App() {
         convId = conv.id;
         setConversationId(convId);
       }
-      await sendChat(convId, text, controller.signal, (event) => {
+      await sendChat(convId, outgoing, controller.signal, (event) => {
         if (abortedRef.current) return;
         if (event.type === 'token') {
           acc += event.text;
           updateMessage(aiId, { content: acc, status: 'revealing' });
+        } else if (event.type === 'reset') {
+          // The backend rejected what streamed so far (it claimed an action
+          // no tool performed) and is answering again — drop that text.
+          acc = '';
+          updateMessage(aiId, { content: '', status: 'thinking' });
         } else if (event.type === 'done') {
           action = event.action;
           // The backend may have rewritten the saved text (e.g. cleaning
@@ -290,9 +401,6 @@ export default function App() {
           <button className="ghost" type="button" onClick={() => setFinanceOpen(true)}>
             {t('common.finance')}
           </button>
-          <button className="ghost" type="button" onClick={() => setImportOpen(true)}>
-            {t('common.import')}
-          </button>
           <button className="ghost" id="reset" type="button" onClick={startNewChat}>
             <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M8 3v10M3 8h10" /></svg>
             {t('common.newChat')}
@@ -349,7 +457,12 @@ export default function App() {
           </section>
         )}
 
-        <Chat messages={messages} scrollSignal={sendTick} smoothScrollSignal={historyScrollTick} />
+        <Chat
+          messages={messages}
+          memoryProgress={memoryProgress}
+          scrollSignal={sendTick}
+          smoothScrollSignal={historyScrollTick}
+        />
       </main>
 
       <Composer
@@ -360,13 +473,12 @@ export default function App() {
         busy={busy}
         reasoning={reasoning}
         onToggleReasoning={toggleReasoning}
+        progress={messages.some((m) => m.kind === 'memory' && m.status !== 'done' && m.status !== 'error') ? null : memoryProgress}
       />
 
       <MemoryPanel open={memoryOpen} onClose={() => setMemoryOpen(false)} />
 
       <FinancePanel open={financeOpen} onClose={() => setFinanceOpen(false)} />
-
-      <ImportPanel open={importOpen} onClose={() => setImportOpen(false)} />
 
       <ChatList
         open={chatListOpen}

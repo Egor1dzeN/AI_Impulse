@@ -106,6 +106,10 @@ def _security_ok(flags_json: str | None) -> bool:
     return not flags_json or not (json.loads(flags_json) or {}).get("security")
 
 
+def _unverified(flags_json: str | None) -> bool:
+    return bool(flags_json) and bool((json.loads(flags_json) or {}).get("unverified_sender"))
+
+
 def _even_sample(items: list[Any], limit: int) -> list[Any]:
     if len(items) <= limit:
         return items
@@ -148,7 +152,12 @@ def _email_evidence(user_id: str, pattern: re.Pattern[str]) -> list[dict[str, An
             "AND x.source = ? AND x.external_id = e.id) ORDER BY e.date",
             (user_id, BANK_SOURCE),
         ).fetchall()]
-    hits = [r for r in rows if _security_ok(r["flags_json"]) and pattern.search(f"{r['subject']}\n{r['body']}".lower())]
+    # A one-off sender the user never wrote to is not evidence about the
+    # user at all: asking the model to "not accept personal changes" from it
+    # wasn't enough — a third-party "digest" still turned into "works at
+    # another company". Such mail never reaches profile synthesis.
+    hits = [r for r in rows if _security_ok(r["flags_json"]) and not _unverified(r["flags_json"])
+            and pattern.search(f"{r['subject']}\n{r['body']}".lower())]
     return _even_sample(hits, MAX_EMAIL_EVIDENCE)
 
 

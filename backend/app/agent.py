@@ -5,6 +5,7 @@ import logging
 import re
 from typing import Any, Iterator
 
+import httpx
 from gigachat.exceptions import GigaChatException, RateLimitError
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.errors import GraphRecursionError
@@ -27,6 +28,51 @@ logger = logging.getLogger(__name__)
 # to the user yet this turn — it's safe to transparently retry once before
 # falling back to a canned message.
 MAX_ATTEMPTS = 2
+
+# Tools that write something (or prepare a confirm card for it). A turn that
+# claims an action happened must have called one of these.
+ACTION_TOOL_NAMES = {
+    "create_calendar_event", "update_calendar_event", "delete_calendar_event", "draft_email",
+    "create_task", "add_expense", "add_income", "update_transaction", "log_meal", "log_weight", "log_workout",
+}
+
+# Imperatives ("поставь", "запланируйте") or "можешь/нужно + infinitive" —
+# not bare stems, so a question like "что у меня запланировано?" isn't
+# mistaken for a request to act.
+_ACTION_REQUEST_RE = re.compile(
+    r"\b(поставь|запланируй|назначь|создай|добавь|отправь|напиши|удали|перенеси|отмени|напомни|запиши|пригласи|забронируй)(те)?\b"
+    r"|\b(можешь|сможешь|нужно|надо|пожалуйста)\b[^.?!\n]{0,20}\b(поставить|запланировать|назначить|создать|добавить|"
+    r"отправить|написать|удалить|перенести|отменить|напомнить|записать|пригласить|забронировать)\b",
+    re.IGNORECASE,
+)
+_ACTION_CLAIM_RE = re.compile(
+    r"^\W*(готово|сделано)\b"
+    r"|(?<!не )\b(я )?(поставил|запланировал|создал|добавил|отправил|удалил|перенёс|перенес|отменил|записал|пригласил|назначил)а?\b"
+    r"|(?<!не )\b(запланирован|создан|добавлен|отправлен|удал[её]н|перенес[её]н|отмен[её]н|назначен)[аоы]?\b",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+ACTION_CLAIM_CORRECTION = (
+    "Системная проверка: в предыдущем ответе ты сообщил, что действие выполнено, но ни один инструмент "
+    "действия в этом ходе не вызывался — значит, на самом деле ничего не создано и не отправлено. "
+    "Если подходящий инструмент тебе доступен — вызови его сейчас (он подготовит черновик на подтверждение "
+    "пользователем). Если такого инструмента нет (например, сервис не подключён в настройках) или действие "
+    "выполнять нельзя — честно скажи пользователю, что ничего не сделано, и почему. Не пиши, что действие выполнено."
+)
+ACTION_NOT_DONE_REPLY = (
+    "Я ничего не создал и не отправил: не удалось подготовить черновик действия. "
+    "Проверьте, что нужный сервис (например, Google Calendar или Gmail) подключён в настройках, и повторите запрос."
+)
+
+
+def claims_unperformed_action(user_message: str, reply: str, action_tools: set[str]) -> bool:
+    """The user asked for an action, the reply says it's done, yet no
+    action tool ran this turn."""
+    return (
+        not action_tools
+        and bool(_ACTION_REQUEST_RE.search(user_message or ""))
+        and bool(_ACTION_CLAIM_RE.search(reply or ""))
+    )
 
 # How many of the most recent saved messages (both roles combined) to feed
 # back in as short-term conversational context, on top of whatever the
@@ -144,117 +190,160 @@ def handle_chat_turn_stream(
     }
     config = {"recursion_limit": RECURSION_LIMIT}
 
-    reply_parts: list[str] = []
-    last_action: dict[str, Any] | None = None
-    web_search_sources: list[dict[str, Any]] = []
+    def run_graph(run_inputs: dict[str, Any]):
+        """One agent pass (with the empty-reply retry); streams token /
+        tool_call events and returns what the pass produced."""
+        reply_parts: list[str] = []
+        last_action: dict[str, Any] | None = None
+        web_search_sources: list[dict[str, Any]] = []
+        action_tools: set[str] = set()
 
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        reply_parts = []
-        last_action = None
-        had_tool_call = False
-        pending_calls: dict[str, dict[str, Any]] = {}
-        recursion_hit = False
-        llm_error: str | None = None
-        web_search_sources = []
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            reply_parts = []
+            last_action = None
+            had_tool_call = False
+            pending_calls: dict[str, dict[str, Any]] = {}
+            action_tools = set()
+            recursion_hit = False
+            llm_error: str | None = None
+            web_search_sources = []
 
-        try:
-            for mode, payload in graph.stream(inputs, config=config, stream_mode=["messages", "updates"]):
-                if mode == "messages":
-                    chunk, meta = payload
-                    if meta.get("langgraph_node") == "agent" and chunk.content:
-                        reply_parts.append(chunk.content)
-                        yield {"type": "token", "text": chunk.content}
-                    continue
+            try:
+                for mode, payload in graph.stream(run_inputs, config=config, stream_mode=["messages", "updates"]):
+                    if mode == "messages":
+                        chunk, meta = payload
+                        if meta.get("langgraph_node") == "agent" and chunk.content:
+                            reply_parts.append(chunk.content)
+                            yield {"type": "token", "text": chunk.content}
+                        continue
 
-                for node_name, node_update in payload.items():
-                    for msg in node_update.get("messages", []):
-                        if node_name == "agent" and isinstance(msg, AIMessage) and msg.tool_calls:
-                            for tc in msg.tool_calls:
-                                pending_calls[tc["id"]] = {"name": tc["name"], "arguments": tc["args"]}
+                    for node_name, node_update in payload.items():
+                        for msg in node_update.get("messages", []):
+                            if node_name == "agent" and isinstance(msg, AIMessage) and msg.tool_calls:
+                                for tc in msg.tool_calls:
+                                    pending_calls[tc["id"]] = {"name": tc["name"], "arguments": tc["args"]}
+                                    logger.info(
+                                        "tool call requested: user_id=%s %s(%s)",
+                                        user_id, tc["name"], _log_repr(tc["args"]),
+                                    )
+                            elif node_name == "tools" and isinstance(msg, ToolMessage):
+                                had_tool_call = True
+                                call = pending_calls.pop(msg.tool_call_id, None)
+                                name = call["name"] if call else msg.name
+                                arguments = call["arguments"] if call else {}
+                                # A tool built with response_format="content_and_artifact"
+                                # (currently just build_route) puts its full
+                                # result on .artifact and a slimmed-down summary
+                                # on .content — .content is what re-enters the
+                                # model's prompt on the next turn, so anything
+                                # too big for that (e.g. a route's few-thousand-
+                                # point geometry) has to travel via .artifact
+                                # instead. Everything else leaves .artifact
+                                # unset and keeps going through .content as before.
+                                result = msg.artifact if msg.artifact is not None else _parse_tool_result(msg.content)
                                 logger.info(
-                                    "tool call requested: user_id=%s %s(%s)",
-                                    user_id, tc["name"], _log_repr(tc["args"]),
+                                    "tool call result: user_id=%s %s(%s) -> %s",
+                                    user_id, name, _log_repr(arguments), _log_repr(result),
                                 )
-                        elif node_name == "tools" and isinstance(msg, ToolMessage):
-                            had_tool_call = True
-                            call = pending_calls.pop(msg.tool_call_id, None)
-                            name = call["name"] if call else msg.name
-                            arguments = call["arguments"] if call else {}
-                            # A tool built with response_format="content_and_artifact"
-                            # (currently just build_route) puts its full
-                            # result on .artifact and a slimmed-down summary
-                            # on .content — .content is what re-enters the
-                            # model's prompt on the next turn, so anything
-                            # too big for that (e.g. a route's few-thousand-
-                            # point geometry) has to travel via .artifact
-                            # instead. Everything else leaves .artifact
-                            # unset and keeps going through .content as before.
-                            result = msg.artifact if msg.artifact is not None else _parse_tool_result(msg.content)
-                            logger.info(
-                                "tool call result: user_id=%s %s(%s) -> %s",
-                                user_id, name, _log_repr(arguments), _log_repr(result),
-                            )
-                            yield {"type": "tool_call", "tool": name, "arguments": arguments}
-                            if name not in MEMORY_TOOL_NAMES:
-                                last_action = {"tool": name, "arguments": arguments, "result": result}
-                            if name == "web_search" and isinstance(result, dict):
-                                # Flattened in call order across every
-                                # web_search this turn — matches how the
-                                # model itself numbers "[sources=[N]]"
-                                # citations (see _rewrite_source_citations).
-                                web_search_sources.extend(result.get("results") or [])
-        except GraphRecursionError:
-            recursion_hit = True
+                                yield {"type": "tool_call", "tool": name, "arguments": arguments}
+                                if name not in MEMORY_TOOL_NAMES:
+                                    last_action = {"tool": name, "arguments": arguments, "result": result}
+                                if name in ACTION_TOOL_NAMES:
+                                    action_tools.add(name)
+                                if name == "web_search" and isinstance(result, dict):
+                                    # Flattened in call order across every
+                                    # web_search this turn — matches how the
+                                    # model itself numbers "[sources=[N]]"
+                                    # citations (see _rewrite_source_citations).
+                                    web_search_sources.extend(result.get("results") or [])
+            except GraphRecursionError:
+                recursion_hit = True
+                logger.warning(
+                    "recursion limit (%d) hit for user_id=%s conversation_id=%s message=%r",
+                    RECURSION_LIMIT, user_id, conversation_id, message,
+                )
+            except RateLimitError:
+                # GigaChat's own quota, not this app's — retrying immediately
+                # would just hit the same 429, so surface it plainly instead of
+                # burning another attempt (or letting it propagate and blow up
+                # the whole SSE response, which is what happened before this
+                # was added: an uncaught exception mid-stream crashes the
+                # generator and the frontend gets nothing but a broken request).
+                llm_error = "rate_limit"
+                logger.warning(
+                    "GigaChat rate limit hit for user_id=%s conversation_id=%s", user_id, conversation_id,
+                )
+            except (GigaChatException, httpx.HTTPError):
+                # httpx errors: the connection to GigaChat dropped even after
+                # chat_gigachat's own retries — answer plainly instead of
+                # letting the exception kill the SSE stream mid-turn.
+                llm_error = "llm_error"
+                logger.exception(
+                    "GigaChat request failed for user_id=%s conversation_id=%s", user_id, conversation_id,
+                )
+
+            if recursion_hit:
+                fallback = "Не получилось сформировать ответ за отведённое число шагов. Попробуй переформулировать вопрос."
+                reply_parts = [fallback]
+                yield {"type": "token", "text": fallback}
+                break
+
+            if llm_error == "rate_limit":
+                fallback = "Сейчас слишком много запросов к модели — лимит GigaChat временно исчерпан. Подождите немного и попробуйте снова."
+                reply_parts = [fallback]
+                yield {"type": "token", "text": fallback}
+                break
+
+            if llm_error == "llm_error":
+                fallback = "Не получилось получить ответ от модели — ошибка на стороне GigaChat. Попробуйте ещё раз через некоторое время."
+                reply_parts = [fallback]
+                yield {"type": "token", "text": fallback}
+                break
+
+            if reply_parts or had_tool_call:
+                break  # got real text and/or a tool ran — nothing to retry
+
+            # Nothing was yielded at all this attempt, so a silent retry is
+            # invisible to the frontend (still shows "thinking").
             logger.warning(
-                "recursion limit (%d) hit for user_id=%s conversation_id=%s message=%r",
-                RECURSION_LIMIT, user_id, conversation_id, message,
-            )
-        except RateLimitError:
-            # GigaChat's own quota, not this app's — retrying immediately
-            # would just hit the same 429, so surface it plainly instead of
-            # burning another attempt (or letting it propagate and blow up
-            # the whole SSE response, which is what happened before this
-            # was added: an uncaught exception mid-stream crashes the
-            # generator and the frontend gets nothing but a broken request).
-            llm_error = "rate_limit"
-            logger.warning(
-                "GigaChat rate limit hit for user_id=%s conversation_id=%s", user_id, conversation_id,
-            )
-        except GigaChatException:
-            llm_error = "llm_error"
-            logger.exception(
-                "GigaChat request failed for user_id=%s conversation_id=%s", user_id, conversation_id,
+                "empty reply on attempt %d/%d for user_id=%r, message=%r",
+                attempt, MAX_ATTEMPTS, user_id, message,
             )
 
-        if recursion_hit:
-            fallback = "Не получилось сформировать ответ за отведённое число шагов. Попробуй переформулировать вопрос."
-            reply_parts = [fallback]
-            yield {"type": "token", "text": fallback}
-            break
 
-        if llm_error == "rate_limit":
-            fallback = "Сейчас слишком много запросов к модели — лимит GigaChat временно исчерпан. Подождите немного и попробуйте снова."
-            reply_parts = [fallback]
-            yield {"type": "token", "text": fallback}
-            break
+        return {
+            "reply": "".join(reply_parts).strip(),
+            "last_action": last_action,
+            "web_search_sources": web_search_sources,
+            "action_tools": action_tools,
+        }
 
-        if llm_error == "llm_error":
-            fallback = "Не получилось получить ответ от модели — ошибка на стороне GigaChat. Попробуйте ещё раз через некоторое время."
-            reply_parts = [fallback]
-            yield {"type": "token", "text": fallback}
-            break
+    run = yield from run_graph(inputs)
 
-        if reply_parts or had_tool_call:
-            break  # got real text and/or a tool ran — nothing to retry
-
-        # Nothing was yielded at all this attempt, so a silent retry is
-        # invisible to the frontend (still shows "thinking").
+    # The model sometimes reports an action as done ("Готово, встреча
+    # запланирована") without ever calling the draft tool — nothing exists
+    # and there was no confirmation card. Catch that deterministically: give
+    # it one corrected pass, and if it still claims success, replace the
+    # reply with an honest "nothing was done".
+    if claims_unperformed_action(message, run["reply"], run["action_tools"]):
         logger.warning(
-            "empty reply on attempt %d/%d for user_id=%r, message=%r",
-            attempt, MAX_ATTEMPTS, user_id, message,
+            "unperformed action claimed: user_id=%s conversation_id=%s reply=%s",
+            user_id, conversation_id, _log_repr(run["reply"]),
         )
+        yield {"type": "reset"}
+        retry_inputs = {
+            "messages": [*inputs["messages"], AIMessage(content=run["reply"]), HumanMessage(content=ACTION_CLAIM_CORRECTION)],
+        }
+        run = yield from run_graph(retry_inputs)
+        if claims_unperformed_action(message, run["reply"], run["action_tools"]):
+            logger.warning("unperformed action claimed again, replacing reply: user_id=%s", user_id)
+            yield {"type": "reset"}
+            run["reply"] = ACTION_NOT_DONE_REPLY
+            yield {"type": "token", "text": ACTION_NOT_DONE_REPLY}
 
-    reply = "".join(reply_parts).strip()
+    reply = run["reply"]
+    last_action = run["last_action"]
+    web_search_sources = run["web_search_sources"]
     if not reply:
         reply = (
             "Готово."
@@ -331,6 +420,16 @@ _TECH_TERMS = {
     "monthly_cashflow": "банковские операции",
     "top_contacts": "встречи, письма и чаты",
     "data_overview": "загруженные данные",
+    "get_exchange_rate_history": "курсы ЦБ РФ",
+    "get_exchange_rate": "курсы ЦБ РФ",
+    "get_health_summary": "сводка по здоровью",
+    "get_finance_summary": "сводка по финансам",
+    "list_transactions": "банковские операции",
+    "get_weather": "прогноз погоды",
+    "build_route": "маршрут",
+    "web_search": "поиск в интернете",
+    "log_meal": "журнал питания",
+    "email_patterns": "регулярные письма",
     "proactive_suggestions": "анализ данных",
     "next_week": "следующая неделя",
     "this_week": "эта неделя",
@@ -344,10 +443,41 @@ _TECH_TERMS = {
 _TECH_RE = re.compile(r"\b(" + "|".join(sorted(map(re.escape, _TECH_TERMS), key=len, reverse=True)) + r")\b(\s*\([^)]*\))?")
 
 
+# "[sources=профиль пользователя]" / "[sources=[sec_phish_colleague]]": the
+# model's citation tag with a label instead of a web_search number, which
+# _rewrite_source_citations leaves alone.
+_TEXT_SOURCE_TAG_RE = re.compile(r" ?\[\s*sources?\s*=\s*\[?\s*([^\[\]]*?)\s*\]?\s*\]", re.IGNORECASE)
+# A tool call the model wrote out as plain text instead of calling it.
+_RAW_TOOL_CALL_RE = re.compile(r"\s*<tool_call>[\s\S]*?(?:</tool_call>|$)")
+
+
 def _humanize_sources(text: str) -> str:
     """Explainability must not show raw technical traces: tool names and
-    period keywords the model sometimes echoes are replaced with plain words."""
-    return _TECH_RE.sub(lambda m: _TECH_TERMS[m.group(1)] + (m.group(2) or ""), text)
+    period keywords the model sometimes echoes are replaced with plain words,
+    a labelled "[sources=…]" tag becomes a normal "Источник: …" line (or is
+    dropped when the answer already has one), and a leaked raw tool call is
+    removed."""
+    text = _RAW_TOOL_CALL_RE.sub("", text)
+    labels: list[str] = []
+
+    def drop_tag(m: "re.Match[str]") -> str:
+        label = m.group(1).strip(" ,.")
+        if re.fullmatch(r"[A-Za-z0-9_:.\-]+", label or ""):
+            label = "данные пользователя"  # an internal record id, not a readable source
+        if label and label not in labels:
+            labels.append(label)
+        return ""
+
+    text = _TEXT_SOURCE_TAG_RE.sub(drop_tag, text).rstrip()
+    if labels and "источник" not in text.lower():
+        text += "\n\nИсточник: " + ", ".join(labels) + "."
+    # "сводка по здоровью (get_health_summary)" — the bracketed tool name only repeats the words before it.
+    tool_names = [k for k in _TECH_TERMS if not re.fullmatch(r"(this|next|last)_\w+|month_before_last", k)]
+    text = re.sub(r"\s*\((" + "|".join(map(re.escape, tool_names)) + r")\)", "", text)
+    plain = re.compile(r"\b(" + "|".join(map(re.escape, _TECH_TERMS)) + r")\b")
+    return _TECH_RE.sub(
+        lambda m: _TECH_TERMS[m.group(1)] + plain.sub(lambda p: _TECH_TERMS[p.group(1)], m.group(2) or ""), text
+    )
 
 
 _WEEKDAYS_RU = ["понедельник", "вторник", "среда", "четверг", "пятница", "суббота", "воскресенье"]
@@ -387,6 +517,20 @@ def _save_message(
         )
 
 
+_DOCUMENT_BLOCK_RE = re.compile(r"=== Вложенный документ «[^»]*»[\s\S]*?=== Конец документа ===")
+
+
+def _strip_untrusted_documents(message: str) -> str:
+    """Attached documents are third-party data. One the security check
+    flagged (hidden text, instructions to the assistant) must not feed
+    long-term memory — a recruiter's call transcript saying "save that his
+    salary expectation is 600 000" became a fact about the user. Clean
+    documents still go through extraction as before."""
+    return _DOCUMENT_BLOCK_RE.sub(
+        lambda m: "" if "ПРОВЕРКА БЕЗОПАСНОСТИ" in m.group(0) else m.group(0), message
+    ).strip()
+
+
 def extract_memory_background(user_id: str, message: str) -> None:
     """Runs as a FastAPI BackgroundTask, after the chat response has already
     been sent — a failure here can't affect the reply the user saw, but left
@@ -394,7 +538,10 @@ def extract_memory_background(user_id: str, message: str) -> None:
     the server log for every rate-limited turn. This message's facts are
     simply not extracted this time; the next turn's background call (or a
     future dream/consolidation pass) gets another chance."""
-    message = mask_sensitive(message)
+    message = _strip_untrusted_documents(mask_sensitive(message))
+    if not message.strip():
+        logger.info("background memory extraction skipped: only untrusted attachments, user_id=%s", user_id)
+        return
     logger.info("background memory extraction start: user_id=%s message=%s", user_id, _log_repr(message))
     try:
         memory_bridge.update_memory(message, user_id)

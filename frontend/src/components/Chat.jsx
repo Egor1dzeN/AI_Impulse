@@ -3,6 +3,9 @@ import { md } from '../lib/markdown';
 import { getLanguage, translate, useI18n } from '../lib/i18n.jsx';
 import { confirmCalendarAction, sendEmail } from '../lib/api';
 import MapboxMap from './MapboxMap';
+import MemoryProgress from './MemoryProgress';
+import { splitAttachments } from '../lib/attachments';
+import { progressCaption } from '../lib/memoryProgress';
 
 // Shown instead of the plain dots while waiting for the first token —
 // same idea as Claude's playful status words ("Pondering…", "Noodling…").
@@ -359,17 +362,19 @@ function CalendarActionEmbed({ action }) {
   const [startTime, setStartTime] = useState(toInputDatetime(draft?.start_time));
   const [durationMinutes, setDurationMinutes] = useState(draft?.duration_minutes ?? 30);
   const [notes, setNotes] = useState(draft?.notes || '');
-  if (!draft) return null;
+  const [attendees, setAttendees] = useState((draft?.attendees || []).join(', '));
+  // The tool found the same event already on the calendar and made no draft.
+  if (!draft || draft.duplicate) return null;
 
   if (draft.kind === 'delete') return <CalendarDeleteEmbed draft={draft} />;
 
   const kind = draft.kind; // 'create' | 'update'
-  const locked = status === 'applying' || status === 'done' || status === 'cancelled';
+  const locked = status === 'applying' || status === 'done' || status === 'duplicate' || status === 'cancelled';
 
   const onConfirm = async () => {
     setStatus('applying');
     try {
-      await confirmCalendarAction({
+      const res = await confirmCalendarAction({
         draftId: draft.draft_id,
         kind,
         eventId: draft.event_id,
@@ -377,8 +382,9 @@ function CalendarActionEmbed({ action }) {
         startTime: fromInputDatetime(startTime),
         durationMinutes,
         notes,
+        attendees: kind === 'create' ? attendees.split(/[,;\s]+/).filter(Boolean) : undefined,
       });
-      setStatus('done');
+      setStatus(res?.duplicate ? 'duplicate' : 'done');
     } catch {
       setStatus('error');
     }
@@ -408,6 +414,18 @@ function CalendarActionEmbed({ action }) {
           disabled={locked}
         />
       </label>
+      {kind === 'create' && (
+        <label className="email-draft__field">
+          <span>{t('chat.calendarDraftAttendees')}</span>
+          <input
+            type="text"
+            value={attendees}
+            placeholder="name@example.com"
+            onChange={(e) => setAttendees(e.target.value)}
+            disabled={locked}
+          />
+        </label>
+      )}
       <textarea
         className="email-draft__body"
         placeholder={t('chat.calendarDraftNotes')}
@@ -418,6 +436,8 @@ function CalendarActionEmbed({ action }) {
       />
       {status === 'done' ? (
         <div className="email-draft__sent">{doneLabel}</div>
+      ) : status === 'duplicate' ? (
+        <div className="email-draft__sent">{t('chat.calendarDraftDuplicate')}</div>
       ) : status === 'cancelled' ? (
         <div className="email-draft__sent">{t('chat.calendarDraftCancelled')}</div>
       ) : (
@@ -459,6 +479,70 @@ function Copy({ text }) {
 // copy buttons can't take a React onClick — handle clicks via delegation
 // on the feed container instead. Not a component, so it reads the current
 // language directly rather than through the i18n context.
+function FileChips({ files }) {
+  if (!files.length) return null;
+  return (
+    <ul className="msg__files">
+      {files.map((name, i) => (
+        <li key={`${name}-${i}`} className="msg__file">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M9.5 1.5H4a1 1 0 0 0-1 1v11a1 1 0 0 0 1 1h8a1 1 0 0 0 1-1V5Z" />
+            <path d="M9.5 1.5V5H13" />
+          </svg>
+          <span>{name}</span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+// Attachments render as file chips, never as their raw text — both for a
+// fresh message (files passed explicitly) and for history from the server
+// (split back out of the stored message).
+function YouMessage({ message }) {
+  const { text, files } = message.files
+    ? { text: message.content, files: message.files }
+    : splitAttachments(message.content);
+  return (
+    <div className="msg__body">
+      <FileChips files={files} />
+      {text ? <p>{text}</p> : null}
+    </div>
+  );
+}
+
+// The assistant "noticing" personal data in an attached dataset: the file
+// goes through the import pipeline and this card tracks the memory filling
+// up (profile build + fact extraction) until it's done.
+function MemoryCard({ card, progress }) {
+  const { t } = useI18n();
+  const files = card.files.join('», «');
+  if (card.status === 'thinking') return <ThinkingIndicator />;
+  if (card.status === 'error') {
+    return <p className="memory-card__title memory-card__title--error">{t('chat.memoryCardError', { files })}</p>;
+  }
+  const title = {
+    importing: t('chat.memoryCardImporting', { files }),
+    saving: t('chat.memoryCardSaving', { files }),
+    done: t('chat.memoryCardDone', { files, count: card.records }),
+  }[card.status];
+  let ring;
+  if (card.status === 'done') ring = <MemoryProgress percent={100} caption={t('chat.memoryCardReady')} />;
+  else if (card.status === 'saving' && progress) ring = <MemoryProgress percent={progress.percent} caption={progressCaption(progress, t)} />;
+  else ring = <MemoryProgress percent={0} caption={t('chat.memoryCardReading')} />;
+  return (
+    <div className="memory-card">
+      <p className="memory-card__title">{title}</p>
+      {ring}
+      {card.failed?.length ? (
+        <p className="memory-card__title memory-card__title--error">
+          {t('chat.memoryCardError', { files: card.failed.join('», «') })}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
 function onFeedClick(e) {
   const btn = e.target.closest('.codeblock__copy');
   if (!btn) return;
@@ -473,7 +557,7 @@ function onFeedClick(e) {
   });
 }
 
-export default function Chat({ messages, scrollSignal, smoothScrollSignal }) {
+export default function Chat({ messages, memoryProgress, scrollSignal, smoothScrollSignal }) {
   const { t, lang } = useI18n();
   const feedRef = useRef(null);
 
@@ -524,8 +608,12 @@ export default function Chat({ messages, scrollSignal, smoothScrollSignal }) {
         <div key={m.id} className={`msg msg--${m.role}`}>
           {m.role === 'ai' && <span className="msg__orb" />}
           {m.role === 'you' ? (
-            <div className="msg__body">
-              <p>{m.content}</p>
+            <YouMessage message={m} />
+          ) : m.kind === 'memory' ? (
+            <div className="msg__content">
+              <div className="msg__body">
+                <MemoryCard card={m} progress={memoryProgress} />
+              </div>
             </div>
           ) : (
             <div className="msg__content">

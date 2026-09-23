@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import json
+import logging
+import re
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from datetime import date, timedelta
@@ -15,6 +17,8 @@ from pydantic import BaseModel, Field
 
 from . import db, gmail, google_calendar, memory_bridge, user_settings
 
+logger = logging.getLogger(__name__)
+
 MEMORY_TOOL_NAME = "search_memory"
 LIST_MEMORIES_TOOL_NAME = "list_memories"
 MEMORY_TOOL_NAMES = {MEMORY_TOOL_NAME, LIST_MEMORIES_TOOL_NAME}
@@ -22,6 +26,39 @@ MEMORY_TOOL_NAMES = {MEMORY_TOOL_NAME, LIST_MEMORIES_TOOL_NAME}
 # ============================================================
 # TOPIC 1 — CALENDAR & TASKS
 # ============================================================
+
+
+_PAYMENT_WORDS_RE = re.compile(r"(перевод|перевест|переведи|оплат|заплат|реквизит|платёж|платеж|перечисл|transfer|payment)", re.IGNORECASE)
+_PHISHING_REASONS = {"credential_or_payment_request", "lookalike_sender_domain"}
+
+
+def suspicious_payment_source(user_id: str, text: str) -> dict[str, Any] | None:
+    """A task/reminder to pay or transfer money that echoes an email the
+    security check flagged as phishing (same amount, or a "new requisites"
+    request) — e.g. "Павел просит перевести 120 000 на новые реквизиты,
+    напомни оплатить" where "Павел" wrote from a look-alike domain. Returns
+    that email so the action can be refused or come with a warning."""
+    if not text or not _PAYMENT_WORDS_RE.search(text):
+        return None
+    amounts = {re.sub(r"\D", "", a) for a in re.findall(r"\d[\d  ]{2,}\d", text)}
+    amounts = {a for a in amounts if len(a) >= 4}
+    mentions_requisites = "реквизит" in text.lower()
+    with db.get_conn() as conn:
+        rows = conn.execute(
+            "SELECT subject, body, from_name, from_email, flags_json FROM raw_emails "
+            "WHERE user_id = ? AND flags_json LIKE '%security%' ORDER BY date DESC",
+            (user_id,),
+        ).fetchall()
+    for r in rows:
+        reasons = set((json.loads(r["flags_json"] or "{}") or {}).get("security") or [])
+        if not reasons & _PHISHING_REASONS:
+            continue
+        mail = f"{r['subject']}\n{r['body']}"
+        digits = re.sub(r"[  ]", "", mail)
+        if any(a in digits for a in amounts) or (mentions_requisites and "реквизит" in mail.lower()):
+            return {"subject": r["subject"], "from": f"{r['from_name'] or ''} <{r['from_email']}>".strip(),
+                    "reasons": sorted(reasons)}
+    return None
 
 
 def create_task_impl(user_id: str, title: str, due_date: str | None = None, notes: str | None = None) -> dict[str, Any]:
@@ -47,7 +84,16 @@ def create_task_impl(user_id: str, title: str, due_date: str | None = None, note
 # for why a repeat click of an old card is a safe no-op.
 
 
-def draft_calendar_event_impl(title: str, start_time: str, duration_minutes: int = 30, notes: str | None = None) -> dict[str, Any]:
+_EMAIL_RE = re.compile(r"[\w.+-]+@[\w-]+(\.[\w-]+)+")
+
+
+def draft_calendar_event_impl(
+    title: str,
+    start_time: str,
+    duration_minutes: int = 30,
+    notes: str | None = None,
+    attendees: list[str] | None = None,
+) -> dict[str, Any]:
     return {
         "draft_id": db.new_id(),
         "kind": "create",
@@ -55,6 +101,9 @@ def draft_calendar_event_impl(title: str, start_time: str, duration_minutes: int
         "start_time": start_time,
         "duration_minutes": duration_minutes,
         "notes": notes,
+        # Only well-formed addresses — a name the model couldn't resolve to
+        # an email must not silently turn into a broken invite.
+        "attendees": [a.strip() for a in attendees or [] if _EMAIL_RE.fullmatch(a.strip())],
     }
 
 
@@ -63,6 +112,38 @@ def list_calendar_events_impl(refresh_token: str, date: str, days: int = 1) -> d
     tool that still executes directly, since reading isn't destructive and
     needs no confirmation card."""
     return {"events": google_calendar.list_events(refresh_token=refresh_token, date=date, days=days)}
+
+
+def calendar_events_with_imported(user_id: str, refresh_token: str, date_str: str, days: int = 1) -> dict[str, Any]:
+    """Google Calendar events plus the user's imported calendar for the same
+    days. With both a connected Google account and an imported dataset the
+    model kept reading the (empty) Google calendar, answering "nothing
+    planned" and re-querying date after date until the step limit — so the
+    Google read never comes back without the imported events next to it."""
+    from . import personal_analytics  # local: personal_analytics is heavy and imports half the app
+
+    result: dict[str, Any] = {}
+    try:
+        result = list_calendar_events_impl(refresh_token=refresh_token, date=date_str, days=days)
+    except Exception as exc:  # noqa: BLE001 — imported events are still worth returning
+        logger.warning("get_calendar_events: Google read failed: %s", exc)
+        result = {"events": [], "google_error": str(exc)}
+    try:
+        start = date.fromisoformat(date_str)
+        imported = personal_analytics.calendar_events(
+            user_id, date_from=start.isoformat(), date_to=(start + timedelta(days=max(1, days) - 1)).isoformat()
+        )
+    except Exception:  # noqa: BLE001
+        logger.exception("get_calendar_events: imported calendar read failed")
+        return result
+    if imported.get("count"):
+        result["imported_events"] = imported["events"]
+        result["note"] = (
+            "imported_events — события загруженного календаря пользователя (реальные встречи из его данных, "
+            "только для чтения: их нельзя изменить/удалить через update/delete_calendar_event). events — "
+            "события в Google Calendar."
+        )
+    return result
 
 
 def draft_update_calendar_event_impl(
@@ -1022,6 +1103,18 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
     @tool
     def create_task(title: str, due_date: str | None = None, notes: str | None = None) -> dict:
         """Создать задачу во внутреннем списке задач приложения (НЕ синхронизируется с Google Calendar и не присылает уведомлений в конкретное время). Используй для простых дел без точного времени ("добавь задачу купить молоко", "нужно доделать отчёт до пятницы"). Если пользователь просит именно напоминание/событие на конкретные дату И время ("напомни завтра в 9 утра") — используй create_calendar_event, если она доступна в списке функций, а не эту. due_date — YYYY-MM-DD, опционально."""
+        suspicious = suspicious_payment_source(user_id, f"{title}\n{notes or ''}")
+        if suspicious:
+            # create_task writes immediately (no confirm card) — never for a
+            # payment that traces back to a phishing-flagged email.
+            return {
+                "created": False,
+                "blocked_reason": "Задача НЕ создана: перевод/оплата связаны с подозрительным письмом (возможный фишинг).",
+                "suspicious_email": suspicious,
+                "tell_user": "Предупреди пользователя: письмо помечено как подозрительное (поддельный домен / запрос "
+                             "реквизитов). Не переводить деньги, пока просьба не подтверждена по известному телефону "
+                             "или официальному каналу.",
+            }
         return create_task_impl(user_id=user_id, title=title, due_date=due_date, notes=notes)
 
     @tool
@@ -1146,18 +1239,47 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
 
         @tool(response_format="content_and_artifact")
         def create_calendar_event(
-            title: str, start_time: str, duration_minutes: int = 30, notes: str | None = None
+            title: str,
+            start_time: str,
+            duration_minutes: int = 30,
+            notes: str | None = None,
+            attendees: list[str] | None = None,
         ) -> tuple[str, dict]:
-            """Подготовить напоминание/событие для РЕАЛЬНОГО Google-календаря пользователя (не путать с create_task — та пишет только во внутренний список задач приложения, без синхронизации с Google). Вызывай ТОЛЬКО когда пользователь явно просит поставить напоминание/событие на конкретное время или дату ("напомни завтра в 9 утра", "поставь встречу в календарь на пятницу в 15:00"). title — короткое название. start_time — ОБЯЗАТЕЛЬНО в формате YYYY-MM-DDTHH:MM:SS по московскому времени (Europe/Moscow), без указания смещения часового пояса — сам разреши относительные даты/время ("завтра", "через час", "в 9 утра") в этот формат, используя сегодняшнюю дату из инструкций. duration_minutes — длительность события в минутах (по умолчанию 30), если пользователь не назвал — не спрашивай, просто оставь по умолчанию.
+            """Подготовить напоминание/событие для РЕАЛЬНОГО Google-календаря пользователя (не путать с create_task — та пишет только во внутренний список задач приложения, без синхронизации с Google). Вызывай ТОЛЬКО когда пользователь явно просит поставить напоминание/событие на конкретное время или дату ("напомни завтра в 9 утра", "поставь встречу в календарь на пятницу в 15:00"). title — короткое название. start_time — ОБЯЗАТЕЛЬНО в формате YYYY-MM-DDTHH:MM:SS по московскому времени (Europe/Moscow), без указания смещения часового пояса — сам разреши относительные даты/время ("завтра", "через час", "в 9 утра") в этот формат, используя сегодняшнюю дату из инструкций. duration_minutes — длительность события в минутах (по умолчанию 30), если пользователь не назвал — не спрашивай, просто оставь по умолчанию. attendees — email-адреса приглашённых, когда пользователь просит кого-то пригласить: найди адрес человека в его письмах/встречах (search_emails, calendar_events, search_memory), не выдумывай; если адрес найти не удалось — спроси пользователя.
+
+Если такое событие (то же время, похожее название) уже есть в календаре, функция вернёт duplicate=true и черновик НЕ создаст — тогда скажи пользователю, что встреча уже запланирована, и не создавай её повторно.
 
 ВАЖНО: эта функция НЕ создаёт событие. Она только показывает пользователю карточку с кнопкой «Подтвердить» — событие реально появится в календаре, только когда пользователь сам нажмёт эту кнопку. После вызова НИКОГДА не говори, что событие уже создано или напоминание уже поставлено — просто сообщи, что черновик готов и показан пользователю на подтверждение."""
-            result = draft_calendar_event_impl(title=title, start_time=start_time, duration_minutes=duration_minutes, notes=notes)
+            try:
+                existing = google_calendar.find_duplicate_event(calendar_refresh_token, title, start_time)
+            except Exception:  # noqa: BLE001 — a failed lookup must not block the draft; confirm re-checks
+                logger.exception("create_calendar_event: duplicate lookup failed")
+                existing = None
+            if existing:
+                return (
+                    f"Такое событие уже есть в календаре: «{existing['summary']}», {existing['start']}. "
+                    "Черновик не создан — повторно создавать не нужно.",
+                    {"duplicate": True, "existing": existing},
+                )
+            result = draft_calendar_event_impl(
+                title=title, start_time=start_time, duration_minutes=duration_minutes, notes=notes, attendees=attendees
+            )
+            suspicious = suspicious_payment_source(user_id, f"{title}\n{notes or ''}")
+            if suspicious:
+                result["security_warning"] = suspicious
+                return (
+                    "Черновик подготовлен, НО напоминание об оплате связано с подозрительным письмом "
+                    f"«{suspicious['subject']}» от {suspicious['from']} (возможный фишинг). ОБЯЗАТЕЛЬНО предупреди "
+                    "пользователя об этом в ответе и посоветуй не переводить деньги до подтверждения по "
+                    "известному телефону или официальному каналу.",
+                    result,
+                )
             return "Черновик события подготовлен и показан пользователю для подтверждения.", result
 
         @tool
         def get_calendar_events(date: str, days: int = 1) -> dict:
-            """Посмотреть, что запланировано в РЕАЛЬНОМ Google-календаре пользователя. Вызывай, когда пользователь спрашивает про свои планы/расписание/встречи на конкретный день или период ("что у меня завтра", "какие планы на этой неделе", "что запланировано на пятницу"), а также перед update_calendar_event/delete_calendar_event, чтобы найти event_id, summary и start_time нужного события. date — YYYY-MM-DD, начало периода (переведи "сегодня"/"завтра"/день недели в конкретную дату сам, используя сегодняшнюю дату из инструкций). days — сколько дней подряд просмотреть начиная с date (по умолчанию 1 — только этот день; для "на этой неделе" используй 7). Если events пуст — значит на этот период ничего не запланировано, так и скажи."""
-            return list_calendar_events_impl(refresh_token=calendar_refresh_token, date=date, days=days)
+            """Посмотреть события в РЕАЛЬНОМ Google-календаре пользователя (events, с event_id для update_calendar_event/delete_calendar_event) — плюс события загруженного календаря пользователя за те же даты (imported_events). Для вопросов о расписании, встречах и свободном времени основной инструмент — calendar_events/schedule_analysis; эту функцию вызывай перед изменением/удалением события в Google или чтобы проверить события, созданные уже после загрузки данных. date — YYYY-MM-DD, начало периода. days — сколько дней подряд (по умолчанию 1). Встреча есть, если она в events ИЛИ в imported_events; «ничего не запланировано» — только если пусты оба. Не вызывай повторно для соседних дат — возьми нужный период через days."""
+            return calendar_events_with_imported(user_id, calendar_refresh_token, date, days)
 
         @tool(response_format="content_and_artifact")
         def update_calendar_event(

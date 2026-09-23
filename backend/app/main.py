@@ -291,14 +291,17 @@ def delete_account_data(user_id: str = Depends(auth.get_current_user_id)) -> dic
 IMPORT_SOURCES = {"email", "telegram", "calendar"}
 
 
-def _parse_import_file(raw: str) -> list[dict]:
+def _parse_import_file(raw: str) -> tuple[list[dict], int]:
     """Accept both a JSON array file and a .jsonl (one JSON object per
     non-empty line) file — the competition's own mock data ships as
     .jsonl, but a jury-supplied replacement dataset's exact format isn't
-    guaranteed, and this costs nothing to support."""
-    raw = raw.strip()
+    guaranteed, and this costs nothing to support. Returns (records,
+    skipped_lines): one broken .jsonl line (a stray character left by an
+    editor, a truncated record) is skipped instead of rejecting the whole
+    file; JSONDecodeError only when nothing in it parses."""
+    raw = raw.strip().lstrip("﻿")
     if not raw:
-        return []
+        return [], 0
 
     try:
         parsed = json.loads(raw)
@@ -306,11 +309,56 @@ def _parse_import_file(raw: str) -> list[dict]:
         parsed = None
 
     if isinstance(parsed, list):
-        return parsed
+        return parsed, 0
     if isinstance(parsed, dict):
-        return [parsed]
+        return [parsed], 0
 
-    return [json.loads(line) for line in raw.splitlines() if line.strip()]
+    records: list[dict] = []
+    skipped = 0
+    first_error: json.JSONDecodeError | None = None
+    for line in raw.splitlines():
+        if not line.strip():
+            continue
+        try:
+            record = json.loads(line)
+        except json.JSONDecodeError as exc:
+            skipped += 1
+            first_error = first_error or exc
+            continue
+        if isinstance(record, dict):
+            records.append(record)
+        else:
+            skipped += 1
+    if not records and first_error is not None:
+        raise first_error
+    return records, skipped
+
+
+def _detect_import_source(records: list[dict], filename: str = "") -> str | None:
+    """Chat attachments carry no explicit source, so infer it from the
+    record shape (Gmail-like email / Google Calendar event / Telegram
+    message or Desktop export), falling back to hints in the file name.
+    None means "not a dataset" — the caller treats the file as a document."""
+    votes = {"email": 0, "calendar": 0, "telegram": 0}
+    for record in records[:50]:
+        if not isinstance(record, dict):
+            continue
+        keys = set(record)
+        if str(record.get("kind", "")).startswith("calendar#") or keys & {"start", "dtstart", "end", "dtend"}:
+            votes["calendar"] += 1
+        elif keys & {"subject", "thread_id", "threadId", "labelIds"} or {"from", "body"} <= keys:
+            votes["email"] += 1
+        elif keys & {"msg_id", "chats", "chat"} or isinstance(record.get("messages"), list) or {"sender", "text"} <= keys:
+            votes["telegram"] += 1
+    best = max(votes, key=votes.get)
+    if votes[best]:
+        return best
+
+    name = filename.lower()
+    for source, hints in (("email", ("mail", "email")), ("calendar", ("calendar", "event")), ("telegram", ("telegram", "tg_", "chat"))):
+        if any(h in name for h in hints):
+            return source
+    return None
 
 
 def import_calendar_to_google(user_id: str, records: list[dict]) -> dict:
@@ -361,7 +409,33 @@ _import_lock = threading.Lock()
 def _cancel_background_imports(user_id: str) -> int:
     with _import_lock:
         _import_generation[user_id] = _import_generation.get(user_id, 0) + 1
+        _import_progress.pop(user_id, None)
         return _import_generation[user_id]
+
+
+# Per-user progress of the background half of imports (profile build +
+# per-record fact extraction), polled by the chat's progress ring. One
+# batch accumulates while work is outstanding (several files attached at
+# once show one ring); it restarts from zero once everything has finished.
+_import_progress: dict[str, dict[str, int]] = {}
+
+
+def _progress_add(user_id: str, generation: int, records: int) -> None:
+    with _import_lock:
+        p = _import_progress.get(user_id)
+        finished = p is not None and p["done"] >= p["total"] and p["profile_pending"] == 0
+        if p is None or p["generation"] != generation or finished:
+            p = _import_progress[user_id] = {"generation": generation, "total": 0, "done": 0, "profile_pending": 0}
+        p["total"] += records
+        p["profile_pending"] += 1
+
+
+def _progress_update(user_id: str, generation: int, key: str, delta: int) -> None:
+    """A cancelled (older-generation) import must not touch the new batch."""
+    with _import_lock:
+        p = _import_progress.get(user_id)
+        if p is not None and p["generation"] == generation:
+            p[key] += delta
 
 
 _profile_requests: dict[str, int] = {}
@@ -393,6 +467,7 @@ def _process_import_in_background(
                 logger.info("profile build: user_id=%s result=%s", user_id, result)
             except Exception:  # noqa: BLE001 — the per-record extraction below must still run
                 logger.exception("profile build failed: user_id=%s", user_id)
+    _progress_update(user_id, generation, "profile_pending", -1)
 
     done = 0
     for record in records:
@@ -400,6 +475,7 @@ def _process_import_in_background(
             logger.info("import memory extraction cancelled: user_id=%s source=%s after %d record(s)", user_id, source, done)
             return
         memory_bridge.import_records(user_id, source, [record])
+        _progress_update(user_id, generation, "done", 1)
         done += 1
     logger.info("import memory extraction done: user_id=%s source=%s records=%d", user_id, source, done)
 
@@ -408,7 +484,7 @@ def _process_import_in_background(
 async def import_data(
     background_tasks: BackgroundTasks,
     file: UploadFile = File(...),
-    source: str = Form(...),
+    source: str | None = Form(None),
     replace: bool = Form(False),
     sync_calendar: bool = Form(False),
     user_id: str = Depends(auth.get_current_user_id),
@@ -423,15 +499,22 @@ async def import_data(
     `replace` wipes the account's data first and cancels any extraction
     still running from a previous import, so old facts never mix with the
     new dataset. For source=calendar, `sync_calendar` additionally creates
-    each event on the connected Google Calendar."""
-    if source not in IMPORT_SOURCES:
+    each event on the connected Google Calendar. Without `source` (a
+    dataset file attached in the chat) the source is detected from the
+    records; 422 means the file doesn't look like a dataset at all."""
+    if source is not None and source not in IMPORT_SOURCES:
         raise HTTPException(status_code=400, detail=f"source must be one of: {', '.join(sorted(IMPORT_SOURCES))}")
 
     raw = (await file.read()).decode("utf-8", errors="replace")
     try:
-        records = _parse_import_file(raw)
+        records, skipped_lines = _parse_import_file(raw)
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=400, detail=f"could not parse file as JSON or JSONL: {exc}")
+
+    if source is None:
+        source = _detect_import_source(records, file.filename or "")
+        if source is None:
+            raise HTTPException(status_code=422, detail="could not detect data source (email/telegram/calendar)")
 
     if replace:
         generation = _cancel_background_imports(user_id)
@@ -442,21 +525,45 @@ async def import_data(
 
     stored = personal_data.store_records(user_id, source, records)
     memory_records = stored.pop("memory_records")
+    _progress_add(user_id, generation, len(memory_records))
     background_tasks.add_task(
         _process_import_in_background, user_id, source, memory_records, generation, _request_profile_build(user_id)
     )
 
     result: dict = {
+        "source": source,
         "imported": stored["stored"],
         "failed": 0,
         "errors": [],
         "transactions": stored.get("transactions", 0),
         "flagged": stored.get("flagged", []),
         "memory_extraction_queued": len(memory_records),
+        "skipped_lines": skipped_lines,
     }
     if source == "calendar" and sync_calendar:
         result["calendar_sync"] = import_calendar_to_google(user_id, records)
     return result
+
+
+@app.get("/api/import/progress")
+def import_progress(user_id: str = Depends(auth.get_current_user_id)) -> dict:
+    """How far the background memory filling has got. Percent counts
+    extracted records; it holds at 99 while a profile build is still
+    running, so 100 means the memory is fully ready for questions."""
+    with _import_lock:
+        p = dict(_import_progress.get(user_id) or {"total": 0, "done": 0, "profile_pending": 0})
+    total, done, profile_pending = p["total"], min(p["done"], p["total"]), max(p["profile_pending"], 0)
+    active = profile_pending > 0 or done < total
+    percent = round(100 * done / total) if total else (0 if active else 100)
+    if active:
+        percent = min(percent, 99)
+    return {
+        "active": active,
+        "percent": percent,
+        "done": done,
+        "total": total,
+        "phase": "profile" if profile_pending > 0 else ("facts" if active else "idle"),
+    }
 
 
 @app.get("/api/sandbox", response_model=SandboxOut)
@@ -613,12 +720,19 @@ def calendar_confirm(req: CalendarActionRequest, user_id: str = Depends(auth.get
         if req.kind == "create":
             if not req.title or not req.start_time:
                 raise HTTPException(status_code=400, detail="title and start_time are required")
+            # Same meeting confirmed again from another chat/session — keep
+            # exactly one object on the calendar instead of a second copy.
+            existing = google_calendar.find_duplicate_event(refresh_token, req.title, req.start_time)
+            if existing:
+                google_calendar.mark_action_done(req.draft_id, user_id)
+                return {"already_done": False, "duplicate": True, **existing}
             result = google_calendar.create_event(
                 refresh_token=refresh_token,
                 summary=req.title,
                 start_iso=req.start_time,
                 duration_minutes=req.duration_minutes or 30,
                 description=req.notes,
+                attendees=req.attendees,
             )
         elif req.kind == "update":
             if not req.event_id:

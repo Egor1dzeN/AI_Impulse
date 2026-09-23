@@ -66,6 +66,16 @@ def now_local(user_id: str) -> datetime:
     return datetime.now(tz)
 
 
+def _after_now(user_id: str, value: Any) -> bool:
+    """A message/email dated after the current moment can't have happened
+    yet (a data glitch, or a dataset whose reference point is earlier than
+    its last records). It stays searchable, but must not become a memory
+    fact — "today is his birthday, he's 35" came from a 22.11 message read
+    on 17.09."""
+    dt = parse_dt(value, user_timezone(user_id)) if value else None
+    return dt is not None and dt > now_local(user_id)
+
+
 def parse_dt(value: Any, tz: ZoneInfo) -> datetime | None:
     """Parse ISO / epoch values; naive values are taken as the user's local time."""
     if value in (None, ""):
@@ -392,6 +402,8 @@ def _extract_transactions_and_select(user_id: str, normalized: list[dict[str, An
                 _store_transaction(user_id, e["id"], tx)
                 transactions += 1
                 continue
+        if _after_now(user_id, row["date"]):
+            continue
         memory_records.append({
             **e,
             "from": [e["from"]],
@@ -476,9 +488,11 @@ def _store_calendar(user_id: str, records: list[dict[str, Any]]) -> dict[str, An
                 ),
             )
             if reasons:
+                # Not sent to memory at all: an event carrying instructions is
+                # attacker-controlled as a whole — stripping only the
+                # description still let its organizer/location become "facts"
+                # ("works at <attacker's studio>", "send the budget to …").
                 flagged.append({"id": e["id"], "summary": e["summary"], "reasons": reasons})
-                # The meeting itself is real — only its description is untrusted.
-                memory_records.append({**e, "description": ""})
             elif e.get("status") != "cancelled":
                 memory_records.append({**e, "description": description})
 
@@ -515,7 +529,8 @@ def _store_messages(user_id: str, records: list[dict[str, Any]]) -> dict[str, An
             if reasons:
                 flagged.append({"chat": m["chat"], "msg_id": m["msg_id"], "text": text[:120], "reasons": reasons})
             elif text:
-                memory_records.append({**m, "text": text, "_dt": parse_dt(m["date"], tz)})
+                if not _after_now(user_id, m["date"]):
+                    memory_records.append({**m, "text": text, "_dt": parse_dt(m["date"], tz)})
     return {"stored": len(messages), "flagged": flagged, "memory_records": _conversation_chunks(memory_records)}
 
 

@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from 'react';
 import { extractDocument, transcribeAudio } from '../lib/api';
+import MemoryProgress from './MemoryProgress';
+import { progressCaption } from '../lib/memoryProgress';
 import { useI18n } from '../lib/i18n.jsx';
 
 const uid = () => Math.random().toString(36).slice(2);
 
-export default function Composer({ value, onChange, onSend, onStop, busy, reasoning, onToggleReasoning }) {
+
+export default function Composer({ value, onChange, onSend, onStop, busy, reasoning, onToggleReasoning, progress }) {
   const { t } = useI18n();
   const inputRef = useRef(null);
   const mediaRecorderRef = useRef(null);
@@ -13,18 +16,12 @@ export default function Composer({ value, onChange, onSend, onStop, busy, reason
   const [voiceState, setVoiceState] = useState('idle'); // idle | recording | transcribing
   const [voiceError, setVoiceError] = useState('');
   const [attachError, setAttachError] = useState('');
-  const [attachments, setAttachments] = useState([]); // [{id, name, content}]
+  // [{id, name, kind: 'document', content, flagged} | {id, name, kind: 'dataset', file}]
+  const [attachments, setAttachments] = useState([]);
 
   const ATTACHABLE_EXTENSIONS = ['.pdf', '.docx', '.txt', '.md', '.markdown', '.json', '.jsonl', '.csv', '.log', '.yaml', '.yml'];
+  const DATASET_EXTENSIONS = ['.json', '.jsonl'];
   const MAX_ATTACH_BYTES = 15 * 1024 * 1024;
-
-  // Attachments are extracted server-side (hidden text stripped, secrets
-  // masked, injections flagged) into a block marked as data, appended to
-  // the outgoing message only at send time.
-  const buildOutgoingText = (text) => {
-    const blocks = attachments.map((a) => `\n\n${a.content}`);
-    return (text || '').trimEnd() + blocks.join('');
-  };
 
   const grow = () => {
     const el = inputRef.current;
@@ -41,17 +38,25 @@ export default function Composer({ value, onChange, onSend, onStop, busy, reason
     inputRef.current?.focus();
   }, []);
 
+  // Documents are already extracted (hidden text stripped, secrets masked,
+  // injections flagged); datasets are handed over as files — App loads
+  // them into memory at send time.
+  const sendNow = () => {
+    if (busy || (!value.trim() && !attachments.length)) return;
+    onSend(value, attachments);
+    setAttachments([]);
+    setAttachError('');
+  };
+
   const submit = (e) => {
     e.preventDefault();
-    onSend(buildOutgoingText(value));
-    setAttachments([]);
+    sendNow();
   };
 
   const onKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
-      onSend(buildOutgoingText(value));
-      setAttachments([]);
+      sendNow();
     }
   };
 
@@ -59,33 +64,40 @@ export default function Composer({ value, onChange, onSend, onStop, busy, reason
     setAttachments((prev) => prev.filter((a) => a.id !== id));
   };
 
+  const attachDocument = (file) =>
+    extractDocument(file)
+      .then((doc) => {
+        const flagged = (doc.security || []).length > 0;
+        setAttachments((prev) => [...prev, { id: uid(), name: file.name, kind: 'document', content: doc.block, flagged }]);
+        if (flagged) setAttachError(t('composer.attachFlagged'));
+        inputRef.current?.focus();
+      })
+      .catch(() => setAttachError(t('composer.attachReadError')));
+
   const attach = () => {
     setAttachError('');
     const picker = document.createElement('input');
     picker.type = 'file';
+    picker.multiple = true;
     picker.accept = ATTACHABLE_EXTENSIONS.join(',');
-    picker.addEventListener('change', () => {
-      const file = picker.files[0];
-      if (!file) return;
-
-      const extension = '.' + (file.name.split('.').pop() || '').toLowerCase();
-      if (!ATTACHABLE_EXTENSIONS.includes(extension)) {
-        setAttachError(t('composer.attachUnsupported'));
-        return;
-      }
-      if (file.size > MAX_ATTACH_BYTES) {
-        setAttachError(t('composer.attachTooLarge'));
-        return;
-      }
-
-      extractDocument(file)
-        .then((doc) => {
-          const flagged = (doc.security || []).length > 0;
-          setAttachments((prev) => [...prev, { id: uid(), name: file.name, content: doc.block, flagged }]);
-          if (flagged) setAttachError(t('composer.attachFlagged'));
+    picker.addEventListener('change', async () => {
+      for (const file of Array.from(picker.files)) {
+        const extension = '.' + (file.name.split('.').pop() || '').toLowerCase();
+        if (!ATTACHABLE_EXTENSIONS.includes(extension)) {
+          setAttachError(t('composer.attachUnsupported'));
+          continue;
+        }
+        if (file.size > MAX_ATTACH_BYTES) {
+          setAttachError(t('composer.attachTooLarge'));
+          continue;
+        }
+        if (DATASET_EXTENSIONS.includes(extension)) {
+          setAttachments((prev) => [...prev, { id: uid(), name: file.name, kind: 'dataset', file }]);
           inputRef.current?.focus();
-        })
-        .catch(() => setAttachError(t('composer.attachReadError')));
+        } else {
+          await attachDocument(file);
+        }
+      }
     });
     picker.click();
   };
@@ -234,6 +246,7 @@ export default function Composer({ value, onChange, onSend, onStop, busy, reason
           )}
         </div>
       </form>
+      {progress ? <MemoryProgress percent={progress.percent} caption={progressCaption(progress, t)} /> : null}
       {voiceError || attachError ? (
         <p className="disclaimer disclaimer--error">{voiceError || attachError}</p>
       ) : (

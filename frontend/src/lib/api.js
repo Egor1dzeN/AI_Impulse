@@ -22,7 +22,9 @@ async function json(res) {
     } catch {
       // non-JSON or empty error body — keep the status line
     }
-    throw new Error(detail);
+    const error = new Error(detail);
+    error.status = res.status;
+    throw error;
   }
   return res.json();
 }
@@ -160,7 +162,9 @@ export function disconnectGmail() {
 export function importData({ file, source, replace, syncCalendar }) {
   const form = new FormData();
   form.append('file', file);
-  form.append('source', source);
+  // Omitted source = auto-detect on the backend (FormData would otherwise
+  // send the literal string "undefined").
+  if (source) form.append('source', source);
   form.append('replace', replace ? 'true' : 'false');
   form.append('sync_calendar', syncCalendar ? 'true' : 'false');
   // No Content-Type header here either — see transcribeAudio above.
@@ -169,6 +173,10 @@ export function importData({ file, source, replace, syncCalendar }) {
     headers: authHeaders(),
     body: form,
   }).then(json);
+}
+
+export function fetchImportProgress() {
+  return fetch(`${BASE}/api/import/progress`, { headers: authHeaders() }).then(json);
 }
 
 export function deleteAllAccountData() {
@@ -186,7 +194,7 @@ export function sendEmail({ draftId, to, subject, body }) {
   }).then(json);
 }
 
-export function confirmCalendarAction({ draftId, kind, eventId, title, startTime, durationMinutes, notes }) {
+export function confirmCalendarAction({ draftId, kind, eventId, title, startTime, durationMinutes, notes, attendees }) {
   return fetch(`${BASE}/api/calendar/confirm`, {
     method: 'POST',
     headers: authHeaders({ 'Content-Type': 'application/json' }),
@@ -198,6 +206,7 @@ export function confirmCalendarAction({ draftId, kind, eventId, title, startTime
       start_time: startTime,
       duration_minutes: durationMinutes,
       notes,
+      attendees,
     }),
   }).then(json);
 }

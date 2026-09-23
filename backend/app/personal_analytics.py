@@ -256,7 +256,13 @@ def calendar_events(
     occ = _occurrences(user_id, datetime.combine(start, time(0), tz), datetime.combine(end + timedelta(days=1), time(0), tz))
     if query:
         terms = _terms(query)
-        occ = [o for o in occ if _score(f"{o['summary']} {o['description'] or ''} {o['location'] or ''}", terms) > 0]
+        # People too: "встреча с Павлом" must find events where Павел is an
+        # attendee/organizer, not only ones with his name in the title.
+        def haystack(o: dict[str, Any]) -> str:
+            people = " ".join(f"{a.get('name') or ''} {a.get('email') or ''}" for a in o["attendees"])
+            organizer = f"{o['organizer'].get('name') or ''} {o['organizer'].get('email') or ''}"
+            return f"{o['summary']} {o['description'] or ''} {o['location'] or ''} {people} {organizer}"
+        occ = [o for o in occ if _score(haystack(o), terms) > 0]
     own = set(user_identity(user_id)["emails"])
     result = {
         "period": _period_payload(start, end),
@@ -620,16 +626,26 @@ _REQUEST_RE = re.compile(
 )
 
 
-def _deadline(text: str, sent: datetime | None, today: date) -> dict[str, Any] | None:
+def _deadline(text: str, sent: datetime | None, today: date, now: datetime | None = None) -> dict[str, Any] | None:
     matches = list(_DEADLINE_RE.finditer(text or ""))
     if not matches:
         return None
     phrases = [m.group(0) for m in matches]
     base = sent.date() if sent else today
     resolved: date | None = None
+    deadline_time: str | None = None
     for m in matches:
         token = _norm(m.group(1) or "")
         explicit = re.search(r"(\d{1,2})[./](\d{1,2})(?:[./](\d{2,4}))?", token)
+        clock = re.fullmatch(r"(\d{1,2}):(\d{2})", token)
+        if clock:
+            # "сегодня до 11:00" / "завтра до 11:00": a bare time is that day
+            # of the message (the day word comes BEFORE "до", so the regex
+            # only caught the time).
+            deadline_time = f"{int(clock.group(1)):02d}:{clock.group(2)}"
+            before = _norm(text[max(0, m.start() - 20):m.start()])
+            resolved = base + timedelta(days=2 if "послезавтра" in before else 1 if "завтра" in before else 0)
+            break
         if explicit:
             year = int(explicit.group(3)) if explicit.group(3) else base.year
             year = year + 2000 if year < 100 else year
@@ -661,7 +677,17 @@ def _deadline(text: str, sent: datetime | None, today: date) -> dict[str, Any] |
     status = None
     if resolved:
         status = "просрочено" if resolved < today else "сегодня" if resolved == today else "впереди"
-    return {"phrases": phrases[:4], "deadline_date": resolved.isoformat() if resolved else None, "status": status}
+        if status == "сегодня" and deadline_time and now is not None and now.strftime("%H:%M") > deadline_time:
+            status = "просрочено"
+    return {"phrases": phrases[:4], "deadline_date": resolved.isoformat() if resolved else None,
+            "deadline_time": deadline_time, "status": status}
+
+
+_REPLY_PREFIX_RE = re.compile(r"^\s*((re|fwd?|fw|отв|ответ|пересл)\s*(\[\d+\])?\s*:\s*)+", re.IGNORECASE)
+
+
+def _base_subject(subject: str | None) -> str:
+    return " ".join(_REPLY_PREFIX_RE.sub("", subject or "").casefold().split())
 
 
 def _email_rows(user_id: str) -> list[dict[str, Any]]:
@@ -671,7 +697,43 @@ def _email_rows(user_id: str) -> list[dict[str, Any]]:
             "AND x.external_id = e.id) AS is_tx FROM raw_emails e WHERE e.user_id = ? ORDER BY e.date",
             (BANK_SOURCE, user_id),
         ).fetchall()]
+    # Exports don't always keep sent mail in a SENT folder: a reply can sit in
+    # INBOX (even addressed to the user themself). Whoever sent it from the
+    # user's own address, it's outgoing.
+    own = {e.casefold() for e in user_identity(user_id)["emails"] if e}
+    for r in rows:
+        if r["direction"] != "out" and (r["from_email"] or "").casefold() in own:
+            r["direction"] = "out"
     return rows
+
+
+def _thread_keys(rows: list[dict[str, Any]]) -> dict[str, str]:
+    """email id -> thread key. Starts from thread_id, then joins a "Re: X"
+    message to the earlier message(s) with subject X: some exports give
+    every reply its own thread_id, which made answered mail look
+    unanswered (inbox_overview, proactive)."""
+    parent: dict[str, str] = {}
+
+    def find(k: str) -> str:
+        while parent.get(k, k) != k:
+            parent[k] = parent.get(parent[k], parent[k])
+            k = parent[k]
+        return k
+
+    def key(r: dict[str, Any]) -> str:
+        return r["thread_id"] or r["id"]
+
+    first_by_subject: dict[str, str] = {}
+    for r in sorted(rows, key=lambda r: r["date"] or ""):
+        base = _base_subject(r["subject"])
+        if not base:
+            continue
+        if _REPLY_PREFIX_RE.match(r["subject"] or "") and base in first_by_subject:
+            a, b = find(key(r)), find(first_by_subject[base])
+            if a != b:
+                parent[a] = b
+        first_by_subject.setdefault(base, key(r))
+    return {r["id"]: find(key(r)) for r in rows}
 
 
 def _email_public(r: dict[str, Any], terms: list[str] | None = None, body_chars: int = 0) -> dict[str, Any]:
@@ -739,7 +801,8 @@ def get_email_thread(user_id: str, email_id: str) -> dict[str, Any]:
     target = next((r for r in rows if r["id"] == email_id), None)
     if target is None:
         return {"found": False, "email_id": email_id}
-    thread = [r for r in rows if target["thread_id"] and r["thread_id"] == target["thread_id"]] or [target]
+    keys = _thread_keys(rows)
+    thread = [r for r in rows if keys[r["id"]] == keys[target["id"]]] or [target]
     return {"found": True, "thread": [_email_public(r, body_chars=3000) for r in thread]}
 
 
@@ -752,9 +815,10 @@ def inbox_overview(
     identity = user_identity(user_id)
     own_domains = {e.split("@")[-1] for e in identity["emails"]}
     rows = _email_rows(user_id)
+    keys = _thread_keys(rows)
     by_thread: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for r in rows:
-        by_thread[r["thread_id"] or r["id"]].append(r)
+        by_thread[keys[r["id"]]].append(r)
 
     items, skipped = [], Counter()
     for r in rows:
@@ -764,12 +828,12 @@ def inbox_overview(
         if kind == "bank_notification" and not include_notifications:
             skipped[kind] += 1
             continue
-        thread = by_thread[r["thread_id"] or r["id"]]
+        thread = by_thread[keys[r["id"]]]
         replies_after = [t for t in thread if t["direction"] == "out" and (t["date"] or "") > r["date"]]
         replied_before = [t for t in thread if t["direction"] == "out" and (t["date"] or "") <= r["date"]]
         sent = datetime.fromisoformat(r["date"]) if r["date"] else None
         text = f"{r['subject']}\n{r['body']}"
-        deadline = _deadline(text, sent, now.date()) if kind in ("work", "external") else None
+        deadline = _deadline(text, sent, now.date(), now) if kind in ("work", "external") else None
         if deadline and replies_after:
             deadline["status"] = "закрыто ответом пользователя"
         item = _email_public(r)

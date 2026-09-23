@@ -8,7 +8,9 @@ import uuid
 from threading import Lock
 from typing import Any, Iterator, Optional, Sequence
 
+import httpx
 from gigachat import GigaChat
+from gigachat.exceptions import RateLimitError, ServerError
 from gigachat.models import Chat, Function, FunctionCall, Messages, MessagesRole
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -196,6 +198,24 @@ def _parse_message(message: Messages) -> AIMessage:
     return AIMessage(content=message.content or "")
 
 
+# A pooled keep-alive connection the server already closed while we were
+# busy (e.g. a tool call took a few seconds) fails instantly with
+# "Server disconnected without sending a response". Nothing reached the
+# user yet, so the request is simply resent — httpx drops the dead
+# connection and opens a fresh one.
+_TRANSIENT_NETWORK_ERRORS = (httpx.RemoteProtocolError, httpx.ReadError, httpx.WriteError, httpx.ConnectError)
+_NETWORK_RETRIES = 2
+# 429 Too Many Requests (e.g. while a dataset import is extracting facts in
+# the background) or a transient 5xx such as 504 Gateway Time-out: wait and
+# resend, same "only before the first piece" rule.
+_RATE_LIMIT_RETRIES = 4
+
+
+def _rate_limit_delay(exc: RateLimitError, retry: int) -> float:
+    retry_after = getattr(exc, "retry_after", 0) or 0
+    return float(retry_after) if retry_after > 0 else min(2.0 ** (retry + 1), 20.0)
+
+
 class ChatGigaChat(BaseChatModel):
     """LangChain chat-model adapter around the GigaChat API (via the
     official `gigachat` SDK), as a drop-in alternative to ChatQwen — same
@@ -245,11 +265,28 @@ class ChatGigaChat(BaseChatModel):
         client = get_gigachat_client()
         logger.info("giga request sending: model=%s messages=%d tools=%d", self.model, len(chat.messages), len(chat.functions or []))
         started = time.monotonic()
-        try:
-            resp = client.chat(chat)
-        except Exception:
-            logger.exception("giga request failed after %.1fs", time.monotonic() - started)
-            raise
+        rate_limited = network_failed = 0
+        for _ in range(_NETWORK_RETRIES + _RATE_LIMIT_RETRIES + 1):
+            try:
+                resp = client.chat(chat)
+                break
+            except (RateLimitError, ServerError) as exc:
+                if rate_limited == _RATE_LIMIT_RETRIES:
+                    logger.exception("giga request failed after %.1fs", time.monotonic() - started)
+                    raise
+                delay = _rate_limit_delay(exc, rate_limited)
+                rate_limited += 1
+                logger.warning("giga request: 429, waiting %.1fs (%d/%d)", delay, rate_limited, _RATE_LIMIT_RETRIES)
+                time.sleep(delay)
+            except _TRANSIENT_NETWORK_ERRORS as exc:
+                if network_failed == _NETWORK_RETRIES:
+                    logger.exception("giga request failed after %.1fs", time.monotonic() - started)
+                    raise
+                network_failed += 1
+                logger.warning("giga request: %s, retrying (%d/%d)", exc, network_failed, _NETWORK_RETRIES)
+            except Exception:
+                logger.exception("giga request failed after %.1fs", time.monotonic() - started)
+                raise
         logger.info("giga request done: took %.1fs", time.monotonic() - started)
         message = _parse_message(resp.choices[0].message)
         return ChatResult(generations=[ChatGeneration(message=message)])
@@ -269,25 +306,44 @@ class ChatGigaChat(BaseChatModel):
 
         pending_call: FunctionCall | None = None
 
-        try:
-            for piece in client.stream(chat):
-                if first_piece:
-                    logger.info("giga stream first piece after %.1fs", time.monotonic() - started)
-                    first_piece = False
-                if not piece.choices:
-                    continue
-                delta = piece.choices[0].delta
-                if delta.function_call:
-                    pending_call = delta.function_call
-                    continue
-                if delta.content:
-                    out = ChatGenerationChunk(message=AIMessageChunk(content=delta.content))
-                    if run_manager:
-                        run_manager.on_llm_new_token(delta.content, chunk=out)
-                    yield out
-        except Exception:
-            logger.exception("giga stream failed after %.1fs", time.monotonic() - started)
-            raise
+        rate_limited = network_failed = 0
+        for _ in range(_NETWORK_RETRIES + _RATE_LIMIT_RETRIES + 1):
+            try:
+                for piece in client.stream(chat):
+                    if first_piece:
+                        logger.info("giga stream first piece after %.1fs", time.monotonic() - started)
+                        first_piece = False
+                    if not piece.choices:
+                        continue
+                    delta = piece.choices[0].delta
+                    if delta.function_call:
+                        pending_call = delta.function_call
+                        continue
+                    if delta.content:
+                        out = ChatGenerationChunk(message=AIMessageChunk(content=delta.content))
+                        if run_manager:
+                            run_manager.on_llm_new_token(delta.content, chunk=out)
+                        yield out
+                break
+            except (RateLimitError, ServerError) as exc:
+                if not first_piece or rate_limited == _RATE_LIMIT_RETRIES:
+                    logger.exception("giga stream failed after %.1fs", time.monotonic() - started)
+                    raise
+                delay = _rate_limit_delay(exc, rate_limited)
+                rate_limited += 1
+                logger.warning("giga stream: 429, waiting %.1fs (%d/%d)", delay, rate_limited, _RATE_LIMIT_RETRIES)
+                time.sleep(delay)
+            except _TRANSIENT_NETWORK_ERRORS as exc:
+                # Only before anything was received — a retry after partial
+                # output would duplicate text already shown to the user.
+                if not first_piece or network_failed == _NETWORK_RETRIES:
+                    logger.exception("giga stream failed after %.1fs", time.monotonic() - started)
+                    raise
+                network_failed += 1
+                logger.warning("giga stream: %s, retrying (%d/%d)", exc, network_failed, _NETWORK_RETRIES)
+            except Exception:
+                logger.exception("giga stream failed after %.1fs", time.monotonic() - started)
+                raise
         logger.info("giga stream done: took %.1fs", time.monotonic() - started)
 
         if pending_call:

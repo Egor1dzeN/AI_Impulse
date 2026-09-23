@@ -32,6 +32,42 @@ class EnrichedMemoryCandidate:
     relations: list[Relation] = field(default_factory=list)
 
 
+_CHUNK_HEADER = "Переписка в Telegram"
+_USER_MARK = "(пользователь)"
+_PROPER_RE = re.compile(r"\b[А-ЯЁA-Z][а-яёa-z]{2,}")
+_NOT_PROPER = {"Пользователь", "Пользователя", "Пользователю", "Пользователем", "Пользователе", "Telegram"}
+
+
+def _drop_speaker_misattributions(text: str, candidates: list[MemoryCandidate]) -> list[MemoryCandidate]:
+    """In a chat excerpt, a fact about the user built on a name that only the
+    OTHER person said is that person's fact: brother "Я в Москве совсем
+    закрутился" became "Пользователь живёт в Москве" even with the prompt
+    telling the model not to. Deterministic backstop: a "Пользователь …"
+    candidate whose proper nouns (cities, places) appear only in other
+    speakers' lines — never in the user's own — is dropped."""
+    if not text.startswith(_CHUNK_HEADER) or _USER_MARK not in text:
+        return candidates
+    own_lines, other_lines = [], []
+    for line in text.split("\n")[1:]:
+        speaker, _, said = line.partition(":")
+        (own_lines if _USER_MARK in speaker else other_lines).append(said.lower())
+    own, other = " ".join(own_lines), " ".join(other_lines)
+    kept = []
+    for c in candidates:
+        content = c.content or ""
+        if not content.lower().startswith("пользовател"):
+            kept.append(c)
+            continue
+        names = [w for w in _PROPER_RE.findall(content) if w not in _NOT_PROPER]
+        stems = [w.lower()[: max(4, len(w) - 2)] for w in names]
+        only_other = [s for s in stems if s in other and s not in own]
+        if only_other:
+            print(f"[ENRICHER] dropped misattributed candidate: {content!r} ({only_other} said only by others)")
+            continue
+        kept.append(c)
+    return kept
+
+
 class MemoryEnricher:
     """Unified memory enrichment with one expensive LLM call."""
 
@@ -368,6 +404,8 @@ class MemoryEnricher:
             )
 
             route_mode = "legacy"
+
+        candidates = _drop_speaker_misattributions(text, candidates)
 
         if not candidates:
             return []

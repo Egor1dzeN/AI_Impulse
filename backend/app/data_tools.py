@@ -63,11 +63,11 @@ def build_data_tools(user_id: str) -> list[BaseTool]:
     @_tool("""Точный расчёт по расписанию: свободные окна нужной длины по дням, первый подходящий слот, загрузка
         каждого дня в минутах и самый загруженный день. ОБЯЗАТЕЛЬНО используй для «найди N минут/час»,
         «когда я свободен», «самый загруженный день», «окна под тренировки» — никогда не считай окна сам.
-        min_free_minutes — минимальная длина окна; day_start/day_end — границы рабочего дня (по умолчанию
-        09:00–18:00; для утра/вечера вне работы расширь, например 06:30–22:00); not_before/not_after — «после
+        min_free_minutes — минимальная длина окна; day_start/day_end — границы рабочего дня (не указывай — они
+        определятся по расписанию пользователя; для утра/вечера вне работы расширь, например 06:30–22:00); not_before/not_after — «после
         11:00», «до 16:00». """ + _PERIOD_HELP)
     def schedule_analysis(period: str | None = None, date_from: str | None = None, date_to: str | None = None,
-                          min_free_minutes: int = 30, day_start: str = "09:00", day_end: str = "18:00",
+                          min_free_minutes: int = 30, day_start: str | None = None, day_end: str | None = None,
                           not_before: str | None = None, not_after: str | None = None,
                           include_weekends: bool = False) -> dict:
         return _safe(analytics.schedule_analysis, user_id, period, date_from, date_to, min_free_minutes,

@@ -51,7 +51,12 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("slug")
     ap.add_argument("--phase", default="all", choices=["all", "load", "ask", "security"])
+    ap.add_argument("--user", default="Test", help="аккаунт для прогона (создаётся, если нет) — для параллельных прогонов")
     args = ap.parse_args()
+    ev.USER, ev.PASSWORD = args.user, args.user if args.user != "Test" else "Test"
+    r = requests.post(f"{ev.BASE}/api/auth/login", json={"username": ev.USER, "password": ev.PASSWORD}, timeout=30)
+    if r.status_code != 200:
+        requests.post(f"{ev.BASE}/api/auth/register", json={"username": ev.USER, "password": ev.PASSWORD}, timeout=30).raise_for_status()
     folder = HERE / args.slug
     ev.DATA = folder
     ev.OUT = folder / "eval_results.json"

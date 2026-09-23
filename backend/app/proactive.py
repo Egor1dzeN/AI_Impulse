@@ -9,6 +9,7 @@ screen (GET /api/proactive) share them.
 from __future__ import annotations
 
 import logging
+import re
 from datetime import datetime, time, timedelta
 from typing import Any
 
@@ -175,9 +176,43 @@ def _finance_items(user_id: str) -> list[dict[str, Any]]:
     return items
 
 
+def _upcoming_items(user_id: str) -> list[dict[str, Any]]:
+    """Things due soon that are cheaper to handle now: a subscription renewal
+    that can still be cancelled, a close person's birthday from the calendar."""
+    items = []
+    today = now_local(user_id).date()
+    payments = analytics.recurring_payments(user_id)
+    for a in payments.get("announced_in_email", []):
+        due = datetime.fromisoformat(a["date"]).date()
+        if 0 <= (due - today).days <= 7:
+            items.append(_item(
+                "medium", "subscription", f"Скоро списание: {a['from'] or a['subject']} — {a['amount']:,.0f} ₽ {due:%d.%m}".replace(",", " "),
+                f"Предупреждение в письме «{a['subject']}». Если подписка не нужна — её можно отменить до списания.",
+                "Напомнить за день до списания или помочь отменить подписку.",
+                f"Нужна ли мне подписка {a['from'] or ''} и как её отменить до {due:%d.%m}?", "письмо о продлении подписки",
+            ))
+    with analytics.db.get_conn() as conn:
+        rows = conn.execute(
+            "SELECT summary, start FROM raw_calendar_events WHERE user_id = ? AND all_day = 1 AND status != 'cancelled'",
+            (user_id,),
+        ).fetchall()
+    for r in rows:
+        if not re.search(r"(?i)день рождения|\bдр\b|birthday|юбилей", r["summary"] or ""):
+            continue
+        day = datetime.fromisoformat(r["start"][:10]).date()
+        if 0 <= (day - today).days <= 21:
+            items.append(_item(
+                "low", "birthday", f"Скоро: «{r['summary']}» — {day:%d.%m}",
+                f"Осталось {(day - today).days} дн.",
+                "Поставить напоминание за 3 дня и подумать о подарке.",
+                f"Что подарить и когда напомнить про «{r['summary']}»?", "календарь",
+            ))
+    return items
+
+
 def scan(user_id: str, limit: int = 6) -> dict[str, Any]:
     items: list[dict[str, Any]] = []
-    for detector in (_email_items, _calendar_items, _finance_items):
+    for detector in (_email_items, _calendar_items, _finance_items, _upcoming_items):
         try:
             items.extend(detector(user_id))
         except Exception:  # noqa: BLE001 — one detector failing must not hide the others

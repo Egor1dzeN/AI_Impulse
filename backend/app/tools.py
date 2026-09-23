@@ -1427,7 +1427,32 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
         прямо в тексте рядом с фактом — никогда как "[sources=[N]]" или
         отдельный список ссылок в конце.
         """
-        return web_search_impl(query=query)
+        # The user's own letters/calendar win over the internet: "когда
+        # конференция X" is about the user's registration (dates, city, talk),
+        # and a web page about another edition gave wrong dates twice.
+        from . import personal_analytics as analytics
+
+        own: list[dict[str, Any]] = []
+        try:
+            for e in analytics.search_emails(user_id, query=query, limit=3)["emails"]:
+                if not e.get("security_warning"):
+                    own.append({"type": "письмо пользователя", "date": e["date"], "subject": e["subject"], "from": e["from"],
+                                "snippet": e.get("snippet")})
+            for ev in analytics.calendar_events(user_id, query=query)["events"][:3]:
+                own.append({"type": "событие в календаре", "date": ev["date"], "time": ev["time"], "summary": ev["summary"],
+                            "location": ev.get("location")})
+        except Exception:  # noqa: BLE001 — the web search must still work
+            logger.exception("web_search: own-data lookup failed")
+        result = web_search_impl(query=query)
+        if own:
+            result = {
+                "FOUND_IN_USER_DATA": own,
+                "note": "По этому запросу есть данные самого пользователя (письма/календарь) — отвечай по ним; интернет "
+                        "только дополняет и НЕ заменяет даты, места и детали из данных пользователя. Если нужно, открой "
+                        "письмо через get_email_thread.",
+                **result,
+            }
+        return result
 
     @tool
     def show_map(place: str) -> dict:

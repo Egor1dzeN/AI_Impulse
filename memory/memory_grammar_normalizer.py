@@ -264,6 +264,18 @@ class MemoryGrammarNormalizer:
         ):
             result = result[1:-1].strip()
 
+        # The model sometimes answers about the sentence instead of returning
+        # it ("Предложение не содержит ошибок, оставляю без изменения.") —
+        # that meta-comment used to be stored as the fact itself.
+        if re.search(
+            r"(не содержит (грамматических )?ошибок|ошибок (нет|не обнаружено|не найдено)|"
+            r"(оставляю|возвращаю)\s+(его\s+)?без изменени|исправлени[йя] не требу|"
+            r"без изменений\s*[:.]?\s*$)",
+            result,
+            flags=re.IGNORECASE,
+        ):
+            return fallback
+
         return result or fallback
 
     def correct(

@@ -22,12 +22,17 @@ SCOPE = "https://www.googleapis.com/auth/calendar.events"
 
 EVENTS_ENDPOINT = "https://www.googleapis.com/calendar/v3/calendars/primary/events"
 
-# Reminders always mean this timezone in this deployment (single-user-ish
-# personal project, no per-user timezone setting yet) — see the ai_impulse
-# session decision to hardcode Europe/Moscow rather than read it from the
-# Google account, which would need an extra Calendar API settings call.
-TIMEZONE = "Europe/Moscow"
-MOSCOW_TZ = ZoneInfo(TIMEZONE)
+# Every call takes the user's zone (personal_data.user_timezone(): derived
+# from the imported data, never from the Google account, whose owner may
+# live elsewhere). This is only the fallback when a caller passes none.
+DEFAULT_TZ = "Europe/Moscow"
+
+
+def _tz(tz_name: str | None) -> ZoneInfo:
+    try:
+        return ZoneInfo(tz_name or DEFAULT_TZ)
+    except Exception:  # noqa: BLE001 — unknown zone name: fall back rather than fail the call
+        return ZoneInfo(DEFAULT_TZ)
 
 
 def google_calendar_is_configured() -> bool:
@@ -115,27 +120,23 @@ def mark_action_done(draft_id: str, user_id: str) -> None:
         )
 
 
-def list_events(refresh_token: str, date: str, days: int = 1) -> list[dict[str, Any]]:
+def list_events(refresh_token: str, date: str, days: int = 1, tz_name: str | None = None) -> list[dict[str, Any]]:
     """List events on the user's primary calendar starting `date`
-    (YYYY-MM-DD, Europe/Moscow) across `days` day(s).
-
-    Russia doesn't observe DST (fixed UTC+3 since 2014), so "+03:00" is a
-    safe hardcoded offset for the timeMin/timeMax bounds Calendar's list
-    endpoint requires as self-contained RFC3339 timestamps — unlike
-    create_event's `timeZone` field, there's no separate timezone param
-    here that would resolve a naive time for us.
-    """
+    (YYYY-MM-DD, local to `tz_name`) across `days` day(s). Day bounds and
+    returned start times are in the user's zone, so "tomorrow" means the
+    user's tomorrow."""
     access_token = _get_access_token(refresh_token)
+    tz = _tz(tz_name)
 
-    start_dt = datetime.fromisoformat(date)
+    start_dt = datetime.fromisoformat(date).replace(tzinfo=tz)
     end_dt = start_dt + timedelta(days=days)
 
     resp = requests.get(
         EVENTS_ENDPOINT,
         headers={"Authorization": f"Bearer {access_token}"},
         params={
-            "timeMin": f"{start_dt.isoformat()}+03:00",
-            "timeMax": f"{end_dt.isoformat()}+03:00",
+            "timeMin": start_dt.isoformat(),
+            "timeMax": end_dt.isoformat(),
             "singleEvents": "true",
             "orderBy": "startTime",
             "maxResults": 50,
@@ -147,11 +148,14 @@ def list_events(refresh_token: str, date: str, days: int = 1) -> list[dict[str, 
     events = []
     for item in resp.json().get("items", []):
         start = item.get("start", {})
+        start_value = start.get("dateTime", start.get("date"))
+        if start.get("dateTime"):
+            start_value = datetime.fromisoformat(start["dateTime"].replace("Z", "+00:00")).astimezone(tz).isoformat()
         events.append(
             {
                 "id": item.get("id"),
                 "summary": item.get("summary", "(без названия)"),
-                "start": start.get("dateTime", start.get("date")),
+                "start": start_value,
                 "description": item.get("description"),
             }
         )
@@ -164,19 +168,21 @@ def _title_tokens(title: str) -> set[str]:
     return {w[:5] for w in re.findall(r"[\w:]+", (title or "").casefold()) if len(w) > 1}
 
 
-def find_duplicate_event(refresh_token: str, summary: str, start_iso: str) -> dict[str, Any] | None:
+def find_duplicate_event(refresh_token: str, summary: str, start_iso: str, tz_name: str | None = None) -> dict[str, Any] | None:
     """An event already on the calendar that this create would duplicate:
     same start minute and a similar title. The same request made again in a
     new chat produces a new draft_id, so action_already_done() alone can't
     catch it — the brief requires exactly one object after two runs."""
     access_token = _get_access_token(refresh_token)
-    start_dt = datetime.fromisoformat(start_iso)
+    tz = _tz(tz_name)
+    start_dt = datetime.fromisoformat(start_iso).replace(tzinfo=None)
+    start_aware = start_dt.replace(tzinfo=tz)
     resp = requests.get(
         EVENTS_ENDPOINT,
         headers={"Authorization": f"Bearer {access_token}"},
         params={
-            "timeMin": f"{(start_dt - timedelta(minutes=1)).isoformat()}+03:00",
-            "timeMax": f"{(start_dt + timedelta(minutes=1)).isoformat()}+03:00",
+            "timeMin": (start_aware - timedelta(minutes=1)).isoformat(),
+            "timeMax": (start_aware + timedelta(minutes=1)).isoformat(),
             "singleEvents": "true",
             "maxResults": 20,
         },
@@ -189,10 +195,10 @@ def find_duplicate_event(refresh_token: str, summary: str, start_iso: str) -> di
         start = (item.get("start") or {}).get("dateTime")
         if not start:
             continue
-        # Compare in Moscow local time (start_iso is naive Moscow time).
+        # Compare in the user's local time (start_iso is naive local time).
         existing_start = datetime.fromisoformat(start.replace("Z", "+00:00"))
         if existing_start.tzinfo is not None:
-            existing_start = existing_start.astimezone(MOSCOW_TZ).replace(tzinfo=None)
+            existing_start = existing_start.astimezone(tz).replace(tzinfo=None)
         if existing_start.replace(second=0, microsecond=0) != start_dt.replace(second=0, microsecond=0):
             continue
         existing = _title_tokens(item.get("summary", ""))
@@ -214,11 +220,12 @@ def create_event(
     duration_minutes: int = 30,
     description: str | None = None,
     attendees: list[str] | None = None,
+    tz_name: str | None = None,
 ) -> dict[str, Any]:
     """Create a Google Calendar event acting as a reminder: a popup
-    notification fires exactly at `start_iso` (Europe/Moscow local time, no
-    UTC offset — Google resolves it using `timeZone` below), regardless of
-    the user's own default-reminder settings.
+    notification fires exactly at `start_iso` (the user's local time in
+    `tz_name`, no UTC offset — Google resolves it using `timeZone` below),
+    regardless of the user's own default-reminder settings.
 
     start_iso: naive local datetime, e.g. "2026-09-22T09:00:00".
     """
@@ -230,8 +237,8 @@ def create_event(
     body = {
         "summary": summary,
         "description": description,
-        "start": {"dateTime": start_dt.isoformat(), "timeZone": TIMEZONE},
-        "end": {"dateTime": end_dt.isoformat(), "timeZone": TIMEZONE},
+        "start": {"dateTime": start_dt.isoformat(), "timeZone": _tz(tz_name).key},
+        "end": {"dateTime": end_dt.isoformat(), "timeZone": _tz(tz_name).key},
         "reminders": {
             "useDefault": False,
             "overrides": [{"method": "popup", "minutes": 0}],
@@ -267,6 +274,7 @@ def update_event(
     start_iso: str | None = None,
     duration_minutes: int | None = None,
     description: str | None = None,
+    tz_name: str | None = None,
 ) -> dict[str, Any]:
     """Patch an existing event — only fields the caller actually passes are
     changed. `duration_minutes` only has an effect together with
@@ -283,8 +291,8 @@ def update_event(
     if start_iso is not None:
         start_dt = datetime.fromisoformat(start_iso)
         end_dt = start_dt + timedelta(minutes=duration_minutes if duration_minutes is not None else 30)
-        body["start"] = {"dateTime": start_dt.isoformat(), "timeZone": TIMEZONE}
-        body["end"] = {"dateTime": end_dt.isoformat(), "timeZone": TIMEZONE}
+        body["start"] = {"dateTime": start_dt.isoformat(), "timeZone": _tz(tz_name).key}
+        body["end"] = {"dateTime": end_dt.isoformat(), "timeZone": _tz(tz_name).key}
 
     resp = requests.patch(
         f"{EVENTS_ENDPOINT}/{event_id}",

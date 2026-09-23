@@ -11,7 +11,9 @@ import re
 from datetime import datetime
 from typing import Any
 
-_NUM = r"\d{1,3}(?:[   ]\d{3})+(?:[.,]\d{1,2})?|\d+(?:[.,]\d{1,2})?"
+_NUM = (r"\d{1,3}(?:[   ]\d{3})+(?:[.,]\d{1,2})?"  # 190 000 / 190 000,50
+        r"|\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?"        # 190,000 / 1,250.50 (comma = thousands)
+        r"|\d+(?:[.,]\d{1,2})?")
 _CUR = r"₽|руб\.?(?:лей|ля|ль)?|р\.|rub\b|RUB\b|\$|USD\b|€|EUR\b"
 AMOUNT_RE = re.compile(rf"(?P<sign>[+\-−–])?\s?(?P<num>{_NUM})\s?(?P<cur>{_CUR})", re.IGNORECASE)
 AMOUNT_PREFIX_RE = re.compile(rf"(?P<cur>{_CUR})\s?(?P<num>{_NUM})", re.IGNORECASE)
@@ -72,7 +74,11 @@ INCOME_CATEGORY_HINTS: list[tuple[str, tuple[str, ...]]] = [
 
 
 def _to_float(num: str) -> float:
-    return float(re.sub(r"[   ]", "", num).replace(",", "."))
+    num = re.sub(r"[\s  ]", "", num)
+    # "190,000" / "1,250.50": comma followed by exactly three digits groups thousands.
+    if re.fullmatch(r"\d{1,3}(?:,\d{3})+(?:\.\d{1,2})?", num):
+        return float(num.replace(",", ""))
+    return float(num.replace(",", "."))
 
 
 def _classify_direction(text_lower: str) -> str | None:

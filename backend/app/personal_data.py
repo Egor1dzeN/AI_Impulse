@@ -20,6 +20,7 @@ from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from . import db
 from .bank_parser import parse_bank_notification
+from .city_timezones import timezone_for_city
 from .injection_guard import SenderTrust, normalize, scan_text
 from .masking import mask_sensitive
 
@@ -42,14 +43,49 @@ def _zone(name: str | None) -> ZoneInfo:
         return ZoneInfo("Europe/Moscow")
 
 
+# A bank notification line "Екатеринбург  2026-05-01 08:10" or "г. Казань, 01.05.2026".
+_BANK_CITY_RE = re.compile(r"(?m)^\s*(?:г\.\s*)?([А-ЯЁ][а-яё]+(?:[ \t-][А-ЯЁ]?[а-яё]+)*)[ \t,]+\d{2,4}[-.]\d{2}[-.]\d{2,4}")
+# "Город: Казань" in a letter about the user (HR, insurance, delivery profile).
+_CITY_FIELD_RE = re.compile(r"(?mi)^\s*город(?: проживания)?\s*:\s*(?:г\.\s*)?([А-ЯЁ][а-яё]+(?:[ \t-][А-ЯЁ]?[а-яё]+)*)")
+
+
+def home_city_from_data(user_id: str) -> str | None:
+    """Where the user lives according to their imported files: the most
+    frequent city in bank notifications, or an explicit "Город: …" field.
+    Only cities with a known time zone count, so a merchant word can't win."""
+    with db.get_conn() as conn:
+        bodies = [r["body"] or "" for r in conn.execute(
+            "SELECT body FROM raw_emails WHERE user_id = ? AND direction = 'in'", (user_id,)
+        )]
+    counts: Counter[str] = Counter()
+    for body in bodies:
+        for regex, weight in ((_BANK_CITY_RE, 1), (_CITY_FIELD_RE, 3)):
+            for match in regex.finditer(body):
+                city = match.group(1).strip()
+                if timezone_for_city(city):
+                    counts[city] += weight
+    if not counts:
+        return None
+    city, score = counts.most_common(1)[0]
+    return city if score >= 2 else None
+
+
 def user_timezone(user_id: str) -> ZoneInfo:
+    """The user's time zone, taken only from their imported data (never from
+    the connected Google account, whose owner may live elsewhere):
+    1) the zone most calendar events in the imported file state;
+    2) the zone of the city they live in per the data (bank notifications,
+       "Город: …");
+    3) DEFAULT_TIMEZONE."""
     with db.get_conn() as conn:
         rows = conn.execute(
             "SELECT timezone, COUNT(*) AS c FROM raw_calendar_events "
             "WHERE user_id = ? AND timezone IS NOT NULL GROUP BY timezone ORDER BY c DESC LIMIT 1",
             (user_id,),
         ).fetchall()
-    return _zone(rows[0]["timezone"] if rows else None)
+    if rows:
+        return _zone(rows[0]["timezone"])
+    return _zone(timezone_for_city(home_city_from_data(user_id)))
 
 
 def now_local(user_id: str) -> datetime:
@@ -480,7 +516,9 @@ def _store_calendar(user_id: str, records: list[dict[str, Any]]) -> dict[str, An
                 (
                     user_id, e["id"], e.get("recurringEventId"), mask_sensitive(e["summary"]), description,
                     mask_sensitive(str(e.get("location") or "")) or None, start, end, int(all_day),
-                    e["start"].get("timeZone") or str(tz), e.get("status") or "confirmed", e.get("transparency"),
+                    # Only a zone the file itself states — never the parsing default, or
+                    # user_timezone() would read that default back as "from the data".
+                    e["start"].get("timeZone") or e.get("timeZone"), e.get("status") or "confirmed", e.get("transparency"),
                     e.get("eventType") or "default", importance, (organizer.get("email") or "").lower() or None,
                     organizer.get("displayName"), json.dumps(attendees, ensure_ascii=False),
                     json.dumps(e.get("recurrence")) if e.get("recurrence") else None,

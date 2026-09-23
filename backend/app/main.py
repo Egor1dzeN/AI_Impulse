@@ -716,13 +716,17 @@ def calendar_confirm(req: CalendarActionRequest, user_id: str = Depends(auth.get
     if google_calendar.action_already_done(req.draft_id):
         return {"already_done": True}
 
+    # Times on the card are the user's local time — the zone derived from
+    # their imported data, not the Google account's own setting.
+    tz_name = personal_data.user_timezone(user_id).key
+
     try:
         if req.kind == "create":
             if not req.title or not req.start_time:
                 raise HTTPException(status_code=400, detail="title and start_time are required")
             # Same meeting confirmed again from another chat/session — keep
             # exactly one object on the calendar instead of a second copy.
-            existing = google_calendar.find_duplicate_event(refresh_token, req.title, req.start_time)
+            existing = google_calendar.find_duplicate_event(refresh_token, req.title, req.start_time, tz_name)
             if existing:
                 google_calendar.mark_action_done(req.draft_id, user_id)
                 return {"already_done": False, "duplicate": True, **existing}
@@ -733,6 +737,7 @@ def calendar_confirm(req: CalendarActionRequest, user_id: str = Depends(auth.get
                 duration_minutes=req.duration_minutes or 30,
                 description=req.notes,
                 attendees=req.attendees,
+                tz_name=tz_name,
             )
         elif req.kind == "update":
             if not req.event_id:
@@ -744,6 +749,7 @@ def calendar_confirm(req: CalendarActionRequest, user_id: str = Depends(auth.get
                 start_iso=req.start_time,
                 duration_minutes=req.duration_minutes,
                 description=req.notes,
+                tz_name=tz_name,
             )
         else:
             if not req.event_id:

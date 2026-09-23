@@ -15,7 +15,7 @@ from ddgs.exceptions import DDGSException, RatelimitException, TimeoutException
 from langchain_core.tools import BaseTool, tool
 from pydantic import BaseModel, Field
 
-from . import db, gmail, google_calendar, memory_bridge, user_settings
+from . import db, gmail, google_calendar, memory_bridge, personal_data, user_settings
 
 logger = logging.getLogger(__name__)
 
@@ -107,11 +107,11 @@ def draft_calendar_event_impl(
     }
 
 
-def list_calendar_events_impl(refresh_token: str, date: str, days: int = 1) -> dict[str, Any]:
+def list_calendar_events_impl(refresh_token: str, date: str, days: int = 1, tz_name: str | None = None) -> dict[str, Any]:
     """Read events from the user's own Google Calendar — the only calendar
     tool that still executes directly, since reading isn't destructive and
     needs no confirmation card."""
-    return {"events": google_calendar.list_events(refresh_token=refresh_token, date=date, days=days)}
+    return {"events": google_calendar.list_events(refresh_token=refresh_token, date=date, days=days, tz_name=tz_name)}
 
 
 def calendar_events_with_imported(user_id: str, refresh_token: str, date_str: str, days: int = 1) -> dict[str, Any]:
@@ -124,7 +124,8 @@ def calendar_events_with_imported(user_id: str, refresh_token: str, date_str: st
 
     result: dict[str, Any] = {}
     try:
-        result = list_calendar_events_impl(refresh_token=refresh_token, date=date_str, days=days)
+        tz_name = personal_data.user_timezone(user_id).key
+        result = list_calendar_events_impl(refresh_token=refresh_token, date=date_str, days=days, tz_name=tz_name)
     except Exception as exc:  # noqa: BLE001 — imported events are still worth returning
         logger.warning("get_calendar_events: Google read failed: %s", exc)
         result = {"events": [], "google_error": str(exc)}
@@ -1245,13 +1246,15 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
             notes: str | None = None,
             attendees: list[str] | None = None,
         ) -> tuple[str, dict]:
-            """Подготовить напоминание/событие для РЕАЛЬНОГО Google-календаря пользователя (не путать с create_task — та пишет только во внутренний список задач приложения, без синхронизации с Google). Вызывай ТОЛЬКО когда пользователь явно просит поставить напоминание/событие на конкретное время или дату ("напомни завтра в 9 утра", "поставь встречу в календарь на пятницу в 15:00"). title — короткое название. start_time — ОБЯЗАТЕЛЬНО в формате YYYY-MM-DDTHH:MM:SS по московскому времени (Europe/Moscow), без указания смещения часового пояса — сам разреши относительные даты/время ("завтра", "через час", "в 9 утра") в этот формат, используя сегодняшнюю дату из инструкций. duration_minutes — длительность события в минутах (по умолчанию 30), если пользователь не назвал — не спрашивай, просто оставь по умолчанию. attendees — email-адреса приглашённых, когда пользователь просит кого-то пригласить: найди адрес человека в его письмах/встречах (search_emails, calendar_events, search_memory), не выдумывай; если адрес найти не удалось — спроси пользователя.
+            """Подготовить напоминание/событие для РЕАЛЬНОГО Google-календаря пользователя (не путать с create_task — та пишет только во внутренний список задач приложения, без синхронизации с Google). Вызывай ТОЛЬКО когда пользователь явно просит поставить напоминание/событие на конкретное время или дату ("напомни завтра в 9 утра", "поставь встречу в календарь на пятницу в 15:00"). title — короткое название. start_time — ОБЯЗАТЕЛЬНО в формате YYYY-MM-DDTHH:MM:SS по МЕСТНОМУ времени пользователя (его часовой пояс указан в инструкциях рядом с текущей датой), без указания смещения часового пояса — сам разреши относительные даты/время ("завтра", "через час", "в 9 утра") в этот формат, используя сегодняшнюю дату из инструкций. duration_minutes — длительность события в минутах (по умолчанию 30), если пользователь не назвал — не спрашивай, просто оставь по умолчанию. attendees — email-адреса приглашённых, когда пользователь просит кого-то пригласить: найди адрес человека в его письмах/встречах (search_emails, calendar_events, search_memory), не выдумывай; если адрес найти не удалось — спроси пользователя.
 
 Если такое событие (то же время, похожее название) уже есть в календаре, функция вернёт duplicate=true и черновик НЕ создаст — тогда скажи пользователю, что встреча уже запланирована, и не создавай её повторно.
 
 ВАЖНО: эта функция НЕ создаёт событие. Она только показывает пользователю карточку с кнопкой «Подтвердить» — событие реально появится в календаре, только когда пользователь сам нажмёт эту кнопку. После вызова НИКОГДА не говори, что событие уже создано или напоминание уже поставлено — просто сообщи, что черновик готов и показан пользователю на подтверждение."""
             try:
-                existing = google_calendar.find_duplicate_event(calendar_refresh_token, title, start_time)
+                existing = google_calendar.find_duplicate_event(
+                    calendar_refresh_token, title, start_time, personal_data.user_timezone(user_id).key
+                )
             except Exception:  # noqa: BLE001 — a failed lookup must not block the draft; confirm re-checks
                 logger.exception("create_calendar_event: duplicate lookup failed")
                 existing = None
@@ -1289,7 +1292,7 @@ def build_action_tools(user_id: str) -> list[BaseTool]:
             duration_minutes: int | None = None,
             notes: str | None = None,
         ) -> tuple[str, dict]:
-            """Подготовить изменение существующего события в РЕАЛЬНОМ Google-календаре пользователя (перенести время, переименовать, изменить длительность или описание). event_id бери из get_calendar_events — сначала посмотри события за нужный период, чтобы найти id нужного события; если пользователь не назвал время/день события явно, уточни у него, а не угадывай. Передавай только те поля, которые реально нужно изменить — остальные оставь None, они не тронутся. start_time — если меняешь, формат YYYY-MM-DDTHH:MM:SS по московскому времени, как в create_calendar_event.
+            """Подготовить изменение существующего события в РЕАЛЬНОМ Google-календаре пользователя (перенести время, переименовать, изменить длительность или описание). event_id бери из get_calendar_events — сначала посмотри события за нужный период, чтобы найти id нужного события; если пользователь не назвал время/день события явно, уточни у него, а не угадывай. Передавай только те поля, которые реально нужно изменить — остальные оставь None, они не тронутся. start_time — если меняешь, формат YYYY-MM-DDTHH:MM:SS по местному времени пользователя, как в create_calendar_event.
 
 ВАЖНО: эта функция НЕ меняет событие сразу. Она только показывает пользователю карточку с кнопкой «Подтвердить» — изменения реально применятся, только когда пользователь сам нажмёт эту кнопку. После вызова НИКОГДА не говори, что событие уже изменено — просто сообщи, что изменение показано пользователю на подтверждение."""
             result = draft_update_calendar_event_impl(

@@ -1,7 +1,9 @@
 """Полный прогон data2 (Никита) на живом бэкенде через HTTP API — как жюри через UI.
 
 Запуск: backend/.venv/Scripts/python.exe competition_task/data2/run_eval.py [--phase all|load|ask|security]
-Результаты: competition_task/data2/eval_results.json (дописывается по ходу).
+Другой датасет: --data competition_task/data3 --questions competition_task/data3/questions.json
+(вопросы — JSON-список [id, формулировка 1, формулировка 2]; безопасность для чужого датасета: --phase load / ask).
+Результаты: <папка датасета>/eval_results.json (дописывается по ходу).
 Бэкенд должен работать с ASSISTANT_NOW=2026-09-17T12:30:00+03:00 (backend/.env).
 """
 from __future__ import annotations
@@ -16,6 +18,7 @@ import requests
 
 BASE = "http://127.0.0.1:8001"
 HERE = Path(__file__).parent
+DATA = HERE
 OUT = HERE / "eval_results.json"
 SEC = HERE.parent / "security_tests" / "files"
 USER, PASSWORD = "Test", "Test"
@@ -182,8 +185,9 @@ def phase_load(h, results):
         raise SystemExit(f"account is not clean after reset: {after}")
     imports = []
     t0 = time.time()
-    for name in ["emails_mock_nikita.jsonl", "google_calendar_mock_nikita.jsonl", "telegram_mock_nikita.jsonl"]:
-        with open(HERE / name, "rb") as f:
+    for path in sorted(DATA.glob("*.jsonl")):
+        name = path.name
+        with open(path, "rb") as f:
             r = requests.post(f"{BASE}/api/import", headers=h, files={"file": (name, f)}, timeout=300)
         r.raise_for_status()
         res = r.json()
@@ -219,7 +223,7 @@ def phase_ask(h, results):
         save(results)
     results["proactive"] = requests.get(f"{BASE}/api/proactive", headers=h, timeout=300).json()
     r = requests.get(f"{BASE}/api/memories/export", headers=h, timeout=120)
-    (HERE / "eval_memory_export.json").write_bytes(r.content)
+    (DATA / "eval_memory_export.json").write_bytes(r.content)
     results["memories"] = requests.get(f"{BASE}/api/memories", headers=h, timeout=60).json()
     save(results)
 
@@ -251,12 +255,22 @@ def phase_security(h, results):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--phase", default="all", choices=["all", "load", "ask", "security"])
+    ap.add_argument("--data", default=str(HERE), help="dataset folder with *.jsonl files")
+    ap.add_argument("--questions", default=None, help="JSON list of [id, phrasing 1, phrasing 2]")
+    ap.add_argument("--load-and-ask", action="store_true", help="load + ask, no security phase")
     args = ap.parse_args()
+    global DATA, OUT, QUESTIONS
+    DATA = Path(args.data)
+    OUT = DATA / "eval_results.json"
+    if args.questions:
+        QUESTIONS = [tuple(q) for q in json.loads(Path(args.questions).read_text(encoding="utf-8"))]
+    if args.load_and_ask:
+        args.phase = "load_ask"
     results = load_results()
     h = login()
-    if args.phase in ("all", "load"):
+    if args.phase in ("all", "load", "load_ask"):
         phase_load(h, results)
-    if args.phase in ("all", "ask"):
+    if args.phase in ("all", "ask", "load_ask"):
         phase_ask(h, results)
     if args.phase in ("all", "security"):
         phase_security(h, results)

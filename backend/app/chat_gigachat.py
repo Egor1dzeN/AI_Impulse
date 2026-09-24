@@ -10,7 +10,7 @@ from typing import Any, Iterator, Optional, Sequence
 
 import httpx
 from gigachat import GigaChat
-from gigachat.exceptions import RateLimitError, ServerError
+from gigachat.exceptions import RateLimitError, ResponseError, ServerError
 from gigachat.models import Chat, Function, FunctionCall, Messages, MessagesRole
 from langchain_core.callbacks import CallbackManagerForLLMRun
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -211,6 +211,30 @@ _NETWORK_RETRIES = 2
 _RATE_LIMIT_RETRIES = 7
 
 
+# When the main model's paid quota is used up (402 Payment Required) every
+# answer failed with "ошибка на стороне GigaChat". Switch the whole process to
+# the fallback model instead: a weaker answer beats no answer.
+GIGACHAT_FALLBACK_MODEL = os.environ.get("GIGACHAT_FALLBACK_MODEL", "GigaChat-2")
+_exhausted_models: set[str] = set()
+
+
+def _is_payment_error(exc: Exception) -> bool:
+    return getattr(exc, "status_code", None) == 402 or " 402 " in f" {exc} " or "Payment Required" in str(exc)
+
+
+def effective_model(model: str) -> str:
+    return GIGACHAT_FALLBACK_MODEL if model in _exhausted_models else model
+
+
+def _switch_to_fallback(chat: Chat, exc: Exception) -> bool:
+    if not _is_payment_error(exc) or chat.model == GIGACHAT_FALLBACK_MODEL:
+        return False
+    logger.error("giga: %s quota exhausted (402) — switching to %s", chat.model, GIGACHAT_FALLBACK_MODEL)
+    _exhausted_models.add(chat.model)
+    chat.model = GIGACHAT_FALLBACK_MODEL
+    return True
+
+
 def _rate_limit_delay(exc: RateLimitError, retry: int) -> float:
     retry_after = getattr(exc, "retry_after", 0) or 0
     return float(retry_after) if retry_after > 0 else min(2.0 ** (retry + 1), 30.0)
@@ -247,7 +271,7 @@ class ChatGigaChat(BaseChatModel):
     def _build_chat(self, messages: Sequence[BaseMessage], tools: Sequence[BaseTool], stream: bool) -> Chat:
         functions = [tool_to_function(t) for t in tools] if tools else None
         return Chat(
-            model=self.model,
+            model=effective_model(self.model),
             messages=_to_gigachat_messages(messages),
             temperature=self.temperature,
             functions=functions,
@@ -284,6 +308,11 @@ class ChatGigaChat(BaseChatModel):
                     raise
                 network_failed += 1
                 logger.warning("giga request: %s, retrying (%d/%d)", exc, network_failed, _NETWORK_RETRIES)
+            except ResponseError as exc:
+                if _switch_to_fallback(chat, exc):
+                    continue
+                logger.exception("giga request failed after %.1fs", time.monotonic() - started)
+                raise
             except Exception:
                 logger.exception("giga request failed after %.1fs", time.monotonic() - started)
                 raise
@@ -341,6 +370,11 @@ class ChatGigaChat(BaseChatModel):
                     raise
                 network_failed += 1
                 logger.warning("giga stream: %s, retrying (%d/%d)", exc, network_failed, _NETWORK_RETRIES)
+            except ResponseError as exc:
+                if first_piece and _switch_to_fallback(chat, exc):
+                    continue
+                logger.exception("giga stream failed after %.1fs", time.monotonic() - started)
+                raise
             except Exception:
                 logger.exception("giga stream failed after %.1fs", time.monotonic() - started)
                 raise

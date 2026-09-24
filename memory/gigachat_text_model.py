@@ -94,7 +94,13 @@ class GigaChatTextModel:
             try:
                 resp = self.client.chat(chat)
                 break
-            except (RateLimitError, ServerError, httpx.TransportError) as exc:
+            except Exception as exc:  # noqa: BLE001
+                if (getattr(exc, "status_code", None) == 402 or "Payment Required" in str(exc)) and chat.model != "GigaChat-2":
+                    print(f"[GIGACHAT] {chat.model} quota exhausted (402) — switching to GigaChat-2")
+                    self.model = chat.model = "GigaChat-2"
+                    continue
+                if not isinstance(exc, (RateLimitError, ServerError, httpx.TransportError)):
+                    raise
                 if attempt == _RETRIES:
                     raise
                 delay = float(getattr(exc, "retry_after", 0) or 0) or min(2.0 ** (attempt + 1), 30.0)

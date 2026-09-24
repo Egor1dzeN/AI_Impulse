@@ -3,12 +3,12 @@ import {
   deleteAllAccountData,
   disconnectGmail,
   disconnectGoogleCalendar,
-  fetchMcpStatus,
   fetchSettings,
   getGmailConnectUrl,
   getGoogleCalendarConnectUrl,
   updateSettings,
 } from '../lib/api';
+import McpSettings from './McpSettings';
 import { applyTheme, getTheme, setTheme as persistTheme } from '../lib/settings';
 import { useI18n } from '../lib/i18n.jsx';
 
@@ -43,13 +43,9 @@ export default function SettingsPanel({ open, onClose }) {
   const [gmailError, setGmailError] = useState('');
 
   const [deleteState, setDeleteState] = useState('idle'); // idle | confirming | deleting | done | error
-  const [mcpServers, setMcpServers] = useState([]);
 
   useEffect(() => {
     if (!open) return;
-    fetchMcpStatus()
-      .then((s) => setMcpServers(s.servers || []))
-      .catch(() => setMcpServers([]));
     setError('');
     setKeyInput('');
     setShowConnectForm(false);
@@ -347,28 +343,9 @@ export default function SettingsPanel({ open, onClose }) {
           )}
         </section>
 
-        {/* Servers come from backend/mcp_servers.json — read-only here; hidden when none are configured. */}
-        {mcpServers.length > 0 && (
-          <section>
-            <h3>{t('settings.mcpTitle')}</h3>
-            {mcpServers.map((s) => (
-              <div key={s.name}>
-                <div className="service-row">
-                  <div className="service-row__title">
-                    <span className={`service-row__dot${s.ok ? '' : ' service-row__dot--off'}`} />
-                    {s.name}
-                  </div>
-                </div>
-                <p className={`settings-panel__hint${s.ok ? '' : ' settings-panel__hint--error'}`}>
-                  {s.ok
-                    ? t('settings.mcpTools', { tools: s.tools.map((x) => x.name).join(', ') || '—' })
-                    : t('settings.mcpUnavailable', { error: s.error || '' })}
-                </p>
-              </div>
-            ))}
-            <p className="settings-panel__hint">{t('settings.mcpHint')}</p>
-          </section>
-        )}
+        <section>
+          <McpSettings open={open} />
+        </section>
 
         <section className="settings-panel__danger-zone">
           <h3>{t('settings.dangerZoneTitle')}</h3>

@@ -34,6 +34,7 @@ from fastapi.responses import RedirectResponse, Response, StreamingResponse
 
 from . import agent, auth, conversations, db, documents, gmail, google_calendar, mcp_tools, memory_bridge, personal_data, proactive, profile_builder, tools, transcription, user_settings
 from .schemas import (
+    AddMcpServerRequest,
     AddMemoryRequest,
     CalendarActionRequest,
     ChatMessageOut,
@@ -74,9 +75,24 @@ async def on_startup() -> None:
     await mcp_tools.refresh_mcp_tools()
 
 
-@app.get("/api/mcp/status")
-def mcp_status(user_id: str = Depends(auth.get_current_user_id)) -> dict:
-    return {"servers": mcp_tools.get_status()}
+@app.get("/api/mcp/servers")
+def mcp_servers(refresh: bool = False, user_id: str = Depends(auth.get_current_user_id)) -> dict:
+    """Global servers (mcp_servers.json, read-only) + the user's own."""
+    return {"global": mcp_tools.get_status(), "mine": mcp_tools.get_user_status(user_id, refresh=refresh)}
+
+
+@app.post("/api/mcp/servers")
+def mcp_add_server(req: AddMcpServerRequest, user_id: str = Depends(auth.get_current_user_id)) -> dict:
+    try:
+        return mcp_tools.add_user_server(user_id, req.name, req.url, req.token)
+    except mcp_tools.McpServerError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.delete("/api/mcp/servers/{server_id}")
+def mcp_delete_server(server_id: str, user_id: str = Depends(auth.get_current_user_id)) -> dict:
+    mcp_tools.delete_user_server(user_id, server_id)
+    return {"mine": mcp_tools.get_user_status(user_id)}
 
 
 @app.get("/api/health")

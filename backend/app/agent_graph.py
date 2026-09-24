@@ -27,7 +27,7 @@ def build_tool_list(user_id: str) -> list[BaseTool]:
     memory_tools = tools_module.build_memory_tools(user_id)
     data_tools = build_data_tools(user_id)
     action_tools = tools_module.build_action_tools(user_id)
-    return [*memory_tools, *data_tools, *action_tools, *mcp_tools.get_cached_mcp_tools()]
+    return [*memory_tools, *data_tools, *action_tools, *mcp_tools.get_cached_mcp_tools(), *mcp_tools.get_user_tools(user_id)]
 
 
 def _build_llm(enable_thinking: bool):
@@ -71,7 +71,7 @@ _BLOCKED_NOTE = (
 )
 
 
-def _block_unrequested_writes(state: MessagesState) -> tuple[list[ToolMessage], MessagesState]:
+def _block_unrequested_writes(state: MessagesState, user_id: str | None = None) -> tuple[list[ToolMessage], MessagesState]:
     """"Я съела пасту на 650 ккал, сколько осталось?" is a question, not an
     order to log a meal — yet the model logged it, and the second session
     then subtracted the same 650 twice. A direct-write tool runs only when
@@ -83,7 +83,7 @@ def _block_unrequested_writes(state: MessagesState) -> tuple[list[ToolMessage], 
     text = (human.content if human and isinstance(human.content, str) else "").split("\n\nНе забудь посмотреть в память")[0]
     # An attached document is third-party text too — only the user's own words count.
     text = re.sub(r"=== Вложенный документ[\s\S]*?(=== Конец документа ===|$)", " ", text)
-    mcp_writes = mcp_tools.guarded_tool_names()
+    mcp_writes = mcp_tools.guarded_tool_names(user_id)
 
     def unrequested(name: str) -> bool:
         if name in _GUARDED_TOOLS:
@@ -132,7 +132,7 @@ def build_graph(user_id: str, enable_thinking: bool = True) -> CompiledStateGrap
     # Every tool result passes through masking before it can reach the
     # model's prompt or the UI — no tool has to remember to do it itself.
     def masked_tools_node(state: MessagesState, config) -> dict:
-        blocked, state = _block_unrequested_writes(state)
+        blocked, state = _block_unrequested_writes(state, user_id)
         result = tool_node.invoke(state, config) if state["messages"][-1].tool_calls else {"messages": []}
         result = {**result, "messages": [*blocked, *result.get("messages", [])]}
         for msg in result.get("messages", []):

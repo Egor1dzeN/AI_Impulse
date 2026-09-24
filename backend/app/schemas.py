@@ -125,6 +125,12 @@ class CalendarActionRequest(BaseModel):
     attendees: list[str] | None = None  # create only: invitee emails
 
 
+class AddMcpServerRequest(BaseModel):
+    name: str
+    url: str
+    token: str | None = None
+
+
 class UpdateSettingsRequest(BaseModel):
     # None = leave as-is, "" = disconnect, non-empty = connect/replace.
     intervals_icu_api_key: str | None = None

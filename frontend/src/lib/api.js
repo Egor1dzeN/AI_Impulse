@@ -247,7 +247,19 @@ export function exportMemories() {
 }
 
 
-// Read-only: MCP servers configured on the backend (backend/mcp_servers.json) and their status.
-export function fetchMcpStatus() {
-  return fetch(`${BASE}/api/mcp/status`, { headers: authHeaders() }).then(json);
+// Global MCP servers (backend/mcp_servers.json, read-only) + the user's own.
+export function fetchMcpServers(refresh = false) {
+  return fetch(`${BASE}/api/mcp/servers${refresh ? '?refresh=true' : ''}`, { headers: authHeaders() }).then(json);
+}
+
+export function addMcpServer({ name, url, token }) {
+  return fetch(`${BASE}/api/mcp/servers`, {
+    method: 'POST',
+    headers: authHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ name, url, token }),
+  }).then(json);
+}
+
+export function deleteMcpServer(id) {
+  return fetch(`${BASE}/api/mcp/servers/${encodeURIComponent(id)}`, { method: 'DELETE', headers: authHeaders() }).then(json);
 }

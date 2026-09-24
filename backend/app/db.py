@@ -25,6 +25,18 @@ CREATE TABLE IF NOT EXISTS users (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_id ON users(google_id) WHERE google_id IS NOT NULL;
 
+-- MCP servers a user added in Settings (remote HTTPS only — see mcp_tools.py).
+-- auth_header is never sent back to the browser.
+CREATE TABLE IF NOT EXISTS user_mcp_servers (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    url TEXT NOT NULL,
+    auth_header TEXT,
+    created_at TEXT NOT NULL,
+    UNIQUE(user_id, name)
+);
+
 -- Guards against re-sending the same draft twice (e.g. a page refresh
 -- re-rendering an already-sent draft card with a live "Send" button) —
 -- POST /api/gmail/send checks this before calling Gmail's API at all.

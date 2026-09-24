@@ -134,6 +134,17 @@ export default function App() {
     if (!isChat) lift();
   }, [input, isChat]);
 
+  // The hero grows after first paint (the "Ассистент заметил" cards arrive
+  // asynchronously, the language can change): re-place the composer whenever
+  // its height changes, or the composer stays mid-page on top of the chips.
+  useEffect(() => {
+    const hero = heroRef.current;
+    if (!hero || isChat || typeof ResizeObserver === 'undefined') return undefined;
+    const ro = new ResizeObserver(() => lift());
+    ro.observe(hero);
+    return () => ro.disconnect();
+  }, [isChat]);
+
   // On the start screen the orb is part of the page: when the hero (with the
   // "Ассистент заметил" cards) is taller than the window, scrolling moves the
   // orb up together with it instead of leaving it fixed on top of the cards.

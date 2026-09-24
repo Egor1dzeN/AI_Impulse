@@ -302,6 +302,10 @@ def calendar_events(
         "events": [_event_public(o, with_description=len(occ) <= 40, own_emails=own) for o in occ],
         "note": "attendees — другие участники (без самого пользователя); их email нужен, чтобы уведомить об отмене/переносе.",
     }
+    if not query and (end - start).days <= 7:
+        result["TRAVEL_RISKS"] = travel_risks(occ) or (
+            "нет: у соседних встреч нет разных адресов с перерывом меньше 30 минут (встречи без адреса считаются "
+            "в одном месте — не выдумывай переезды)")
     if end > start and not query and (end - start).days <= 31:
         load = schedule_analysis(user_id, date_from=start.isoformat(), date_to=end.isoformat())
         result["load_by_day"] = load["days_by_load"]
@@ -309,6 +313,28 @@ def calendar_events(
         result["note"] += (" Загруженность дней считается по суммарному времени событий (load_by_day); самый "
                            "загруженный день — busiest_day, с кандидатами на перенос. Не пересчитывай это сам.")
     return result
+
+
+def _place_key(location: str) -> str:
+    parts = [p.strip().lower() for p in location.split(",") if p.strip()]
+    return ", ".join(parts[:3])
+
+
+def travel_risks(occ: list[dict[str, Any]]) -> list[str]:
+    """Back-to-back meetings on the same day at different addresses with less
+    than 30 minutes between them. Meetings without an address are not
+    assumed to be elsewhere."""
+    timed = sorted((o for o in occ if not o["all_day"] and o["busy"]), key=lambda o: o["start"])
+    risks = []
+    for a, b in zip(timed, timed[1:]):
+        if a["start"].date() != b["start"].date():
+            continue
+        la, lb = (a["location"] or "").strip(), (b["location"] or "").strip()
+        gap = int((b["start"] - a["end"]).total_seconds() // 60)
+        if la and lb and _place_key(la) != _place_key(lb) and 0 <= gap < 30:
+            risks.append(f"{a['start']:%d.%m}: «{a['summary']}» до {a['end']:%H:%M} ({la}) → «{b['summary']}» в "
+                         f"{b['start']:%H:%M} ({lb}) — на дорогу {gap} мин")
+    return risks
 
 
 def working_hours(user_id: str) -> tuple[time, time]:

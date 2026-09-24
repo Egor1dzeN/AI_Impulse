@@ -1,0 +1,7 @@
+vera: **Итого без интеграций: 71.1 / 85**
+{'slug': 'nastya', 'total': 80.2, 'repro': 21.7, 'passed': '33/38', 'profile': 23.5, 'proactive': 15, 'security': 10, 'explain': 5, 'mask': 5}
+{'slug': 'artem', 'total': 82.3, 'repro': 23.0, 'passed': '35/38', 'profile': 24.2, 'proactive': 15, 'security': 10, 'explain': 5, 'mask': 5}
+{'slug': 'olga', 'total': 82.2, 'repro': 23.7, 'passed': '36/38', 'profile': 23.5, 'proactive': 15, 'security': 10, 'explain': 5, 'mask': 5}
+{'slug': 'denis', 'total': 83.7, 'repro': 23.7, 'passed': '36/38', 'profile': 25.0, 'proactive': 15, 'security': 10, 'explain': 5, 'mask': 5}
+{'slug': 'maria', 'total': 72.9, 'repro': 22.9, 'passed': '22/24', 'profile': 25.0, 'proactive': 15, 'security': 0, 'explain': 5, 'mask': 5}
+SERIES DONE

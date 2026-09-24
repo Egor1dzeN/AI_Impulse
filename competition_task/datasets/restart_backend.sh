@@ -9,6 +9,6 @@ done
 powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -match 'uvicorn|spawn_main' -and \$_.CommandLine -match 'python' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue }" >/dev/null 2>&1
 sleep 3
 cd "$root/backend"
-nohup .venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001 > server.out.log 2> server.err.log &
+PYTHONIOENCODING=utf-8 PYTHONUTF8=1 nohup .venv/Scripts/python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8001 > server.out.log 2> server.err.log &
 until curl -s -m 3 http://127.0.0.1:8001/api/health >/dev/null; do sleep 2; done
 echo "backend up, pid $(netstat -ano | grep -E '[:.]8001[[:space:]].*LISTENING' | awk '{print $NF}' | head -1)"

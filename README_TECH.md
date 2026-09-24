@@ -206,6 +206,29 @@ cd ~/ai_impulse && ./deploy.sh          # git pull, зависимости/сб�
 ./deploy.sh --force                     # пересобрать и перезапустить всё
 ```
 
+**Журнал аудита** (`backend/app/audit.py`) — полная история того, кто что
+спросил и как система это обработала, в `backend/audit/audit-YYYY-MM-DD.jsonl`
+(одна JSON-строка на событие; папка вне `backend/data/`, её не стирают ни
+«Удалить всю память», ни очистка баз; всё замаскировано):
+- `http` — каждый запрос к `/api`: аккаунт (из JWT), IP, метод, путь, тело
+  запроса без паролей, статус, время, JSON-ответ;
+- `chat_turn_start` / `tool_call` / `model_note` / `chat_retry` / `chat_error` /
+  `chat_turn_done` — ход чата целиком: вопрос, хэш системного промпта (сам
+  промпт — `audit/prompts/<sha>.txt`), каждый инструмент с аргументами и
+  результатом, отказы ограничителей, повторы, итоговый ответ и длительность;
+- `memory_update` — что память создала, обновила или отбросила.
+
+```bash
+backend/.venv/bin/python backend/scripts/audit_view.py                     # сводка по аккаунтам
+backend/.venv/bin/python backend/scripts/audit_view.py --user Test1        # хронология аккаунта
+backend/.venv/bin/python backend/scripts/audit_view.py --user Test1 --full # без сокращений
+backend/.venv/bin/python backend/scripts/audit_view.py --prompt <sha>      # системный промпт хода
+```
+
+Резервные копии баз, индекса и журнала — `backend/scripts/backup_db.py`
+(SQLite online backup, безопасно на работающем сервере), на стенде каждый час
+через cron в `~/backups/db/` (хранятся последние 72).
+
 Логи: `journalctl -u ai-impulse-backend -f` (секреты в логах маскируются),
 журнал запросов Caddy — `/var/lib/caddy/access.log`. Все данные — в
 `backend/data/` (см. [Хранилища данных](#хранилища-данных)); полная очистка

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from typing import Any, Iterator
 
 import httpx
@@ -10,7 +11,7 @@ from gigachat.exceptions import GigaChatException, RateLimitError
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.errors import GraphRecursionError
 
-from . import agent_graph, conversations, db, memory_bridge, personal_data, user_settings
+from . import agent_graph, audit, conversations, db, memory_bridge, personal_data, user_settings
 from .masking import mask_sensitive
 from .prompts import build_system_prompt
 from .tools import MEMORY_TOOL_NAMES
@@ -238,6 +239,17 @@ def handle_chat_turn_stream(
         "messages": [SystemMessage(content=system_prompt), *history, HumanMessage(content=llm_message)],
     }
     config = {"recursion_limit": RECURSION_LIMIT}
+    turn_started = time.monotonic()
+    audit.record(
+        "chat_turn_start", user_id,
+        conversation_id=conversation_id,
+        message=message,
+        enable_thinking=enable_thinking,
+        system_prompt_sha=audit.store_prompt(system_prompt),
+        history_messages=len(history),
+        gmail_connected=gmail_connected,
+        send_unavailable=send_unavailable,
+    )
 
     def run_graph(run_inputs: dict[str, Any]):
         """One agent pass (with the empty-reply retry); streams token /
@@ -276,6 +288,9 @@ def handle_chat_turn_stream(
                                         "tool call requested: user_id=%s %s(%s)",
                                         user_id, tc["name"], _log_repr(tc["args"]),
                                     )
+                                if msg.content:
+                                    audit.record("model_note", user_id, conversation_id=conversation_id,
+                                                 text=msg.content if isinstance(msg.content, str) else str(msg.content))
                             elif node_name == "tools" and isinstance(msg, ToolMessage):
                                 had_tool_call = True
                                 call = pending_calls.pop(msg.tool_call_id, None)
@@ -301,6 +316,13 @@ def handle_chat_turn_stream(
                                 # A call the graph's guards refused did nothing: it must not
                                 # become the turn's action (the UI drew a draft card from it).
                                 refused = isinstance(result, str) and result.startswith("НЕ ВЫПОЛНЕНО")
+                                audit.record(
+                                    "tool_call", user_id,
+                                    conversation_id=conversation_id, attempt=attempt,
+                                    tool=name, arguments=arguments, refused=refused,
+                                    result=msg.content if isinstance(msg.content, str) else str(msg.content),
+                                    artifact=msg.artifact if msg.artifact is not None else None,
+                                )
                                 if name not in MEMORY_TOOL_NAMES and not refused:
                                     last_action = {"tool": name, "arguments": arguments, "result": result}
                                 if name in ACTION_TOOL_NAMES and not refused:
@@ -337,6 +359,11 @@ def handle_chat_turn_stream(
                     "GigaChat request failed for user_id=%s conversation_id=%s", user_id, conversation_id,
                 )
 
+            if recursion_hit or llm_error:
+                audit.record("chat_error", user_id, conversation_id=conversation_id, attempt=attempt,
+                             kind="recursion_limit" if recursion_hit else llm_error,
+                             partial_reply="".join(reply_parts))
+
             if recursion_hit:
                 fallback = "Не получилось сформировать ответ за отведённое число шагов. Попробуй переформулировать вопрос."
                 reply_parts = [fallback]
@@ -364,6 +391,7 @@ def handle_chat_turn_stream(
                 "empty reply on attempt %d/%d for user_id=%r, message=%r",
                 attempt, MAX_ATTEMPTS, user_id, message,
             )
+            audit.record("chat_retry", user_id, conversation_id=conversation_id, reason="empty_reply", attempt=attempt)
 
 
         return {
@@ -382,6 +410,7 @@ def handle_chat_turn_stream(
     # data lookup gets a real answer.
     if _is_canned_refusal(run["reply"]):
         logger.warning("canned GigaChat refusal, retrying: user_id=%s reply=%s", user_id, _log_repr(run["reply"]))
+        audit.record("chat_retry", user_id, conversation_id=conversation_id, reason="canned_refusal", reply=run["reply"])
         yield {"type": "reset"}
         retry_inputs = {
             "messages": [
@@ -399,6 +428,7 @@ def handle_chat_turn_stream(
             fallback = _profile_fallback(message, digest)
             if fallback:
                 yield {"type": "reset"}
+                audit.record("chat_retry", user_id, conversation_id=conversation_id, reason="profile_fallback")
                 run["reply"] = fallback
                 yield {"type": "token", "text": fallback}
 
@@ -412,6 +442,8 @@ def handle_chat_turn_stream(
             "unperformed action claimed: user_id=%s conversation_id=%s reply=%s",
             user_id, conversation_id, _log_repr(run["reply"]),
         )
+        audit.record("chat_retry", user_id, conversation_id=conversation_id, reason="unperformed_action_claim",
+                     reply=run["reply"])
         yield {"type": "reset"}
         retry_inputs = {
             "messages": [*inputs["messages"], AIMessage(content=run["reply"]), HumanMessage(content=ACTION_CLAIM_CORRECTION)],
@@ -419,6 +451,8 @@ def handle_chat_turn_stream(
         run = yield from run_graph(retry_inputs)
         if claims_unperformed_action(message, run["reply"], run["action_tools"]):
             logger.warning("unperformed action claimed again, replacing reply: user_id=%s", user_id)
+            audit.record("chat_retry", user_id, conversation_id=conversation_id, reason="action_claim_replaced",
+                         reply=run["reply"])
             yield {"type": "reset"}
             run["reply"] = EMAIL_SEND_UNAVAILABLE_REPLY if send_unavailable else ACTION_NOT_DONE_REPLY
             yield {"type": "token", "text": run["reply"]}
@@ -447,6 +481,14 @@ def handle_chat_turn_stream(
     logger.info(
         "chat turn done: user_id=%s conversation_id=%s reply=%s last_action_tool=%s",
         user_id, conversation_id, _log_repr(reply), last_action["tool"] if last_action else None,
+    )
+    audit.record(
+        "chat_turn_done", user_id,
+        conversation_id=conversation_id,
+        reply=reply,
+        last_action_tool=last_action["tool"] if last_action else None,
+        used_tools=run.get("used_tools") or [],
+        duration_ms=round((time.monotonic() - turn_started) * 1000),
     )
 
     # `reply` here (unlike the raw tokens streamed above) is the corrected,

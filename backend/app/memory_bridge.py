@@ -182,7 +182,27 @@ def update_memory(text: str, user_id: str, source: "Source | None" = None) -> No
     something the user just typed in chat right now. Plain chat messages
     (the only caller before ingest_email() below existed) omit it and get
     the extractor's default bare "text" source, unchanged from before."""
-    get_memory_system().update(text, user_id, source=source)
+    result = get_memory_system().update(text, user_id, source=source)
+    try:
+        from . import audit
+
+        decisions = []
+        for decision, memory in zip(getattr(result, "decisions", []) or [], getattr(result, "memories", []) or []):
+            decisions.append({
+                "action": decision.action.value,
+                "content": memory.content if memory is not None else decision.candidate.candidate.content,
+                "memory_id": getattr(memory, "id", None),
+                "score": round(float(decision.score or 0), 3),
+                "reason": decision.reason,
+            })
+        audit.record(
+            "memory_update", user_id,
+            source=({"type": getattr(source.type, "value", str(source.type)), "id": source.id} if source else {"type": "chat"}),
+            text=text,
+            decisions=decisions,
+        )
+    except Exception:  # noqa: BLE001 — auditing must not break memory updates
+        logger.exception("memory audit failed: user_id=%s", user_id)
 
 
 def ingest_email(user_id: str, email: dict[str, Any]) -> None:

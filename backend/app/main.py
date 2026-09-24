@@ -32,7 +32,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, Response, StreamingResponse
 
-from . import agent, auth, conversations, db, documents, gmail, google_calendar, mcp_tools, memory_bridge, personal_data, proactive, profile_builder, tools, transcription, user_settings
+from . import agent, audit, auth, conversations, db, documents, gmail, google_calendar, mcp_tools, memory_bridge, personal_data, proactive, profile_builder, tools, transcription, user_settings
 from .schemas import (
     AddMcpServerRequest,
     AddMemoryRequest,
@@ -66,6 +66,8 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+# Outermost: every /api request lands in the audit trail (backend/audit/).
+app.add_middleware(audit.AuditMiddleware)
 
 
 @app.on_event("startup")

@@ -13,3 +13,4 @@ memory (2).rar
 # evaluation run artifacts (competition_task/*/run_eval.py)
 competition_task/*/eval_results*.json
 competition_task/*/eval_memory_export*.json
+/backend/audit/

@@ -33,10 +33,10 @@ const STRINGS = {
       sub: 'Impulse запоминает то, что вы рассказываете, и умеет действовать: ставить задачи, записывать траты и показатели здоровья.',
     },
     chips: [
-      'Хочу купить хлеб за 200 рублей',
-      'Поставь задачу закончить отчёт до пятницы',
-      'Я живу в Москве и учусь на программиста',
-      'Сколько я потратил в этом месяце?',
+      'Что нового?',
+      'Что у меня завтра?',
+      'Что ты обо мне знаешь?',
+      'Какая погода завтра?',
     ],
     replyError: 'Не получилось получить ответ. Проверьте, что бэкенд запущен.',
     composer: {
@@ -276,10 +276,10 @@ const STRINGS = {
       sub: 'Impulse remembers what you tell it and can take action: create tasks, log expenses and health metrics.',
     },
     chips: [
-      'I want to buy bread for 200 rubles',
-      'Set a task to finish the report by Friday',
-      'I live in Moscow and I study programming',
-      'How much did I spend this month?',
+      "What's new?",
+      'What do I have tomorrow?',
+      'What do you know about me?',
+      "What's the weather tomorrow?",
     ],
     replyError: "Couldn't get a reply. Check that the backend is running.",
     composer: {

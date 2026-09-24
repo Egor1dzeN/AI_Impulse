@@ -60,6 +60,14 @@ export default function FinancePanel({ open, onClose }) {
 
         {summary && (
           <section className="finance-summary">
+            {summary.card_balance && (
+              <div className="finance-summary__row">
+                <span className="finance-summary__label">{t('financePanel.cardBalance')}</span>
+                <span className="finance-summary__value">
+                  {Number(summary.card_balance.value).toLocaleString(locale)} ₽
+                </span>
+              </div>
+            )}
             <div className="finance-summary__row">
               <span className="finance-summary__label">{t('financePanel.balance')}</span>
               <span className={`finance-summary__value ${summary.balance >= 0 ? 'finance-summary__value--positive' : 'finance-summary__value--negative'}`}>

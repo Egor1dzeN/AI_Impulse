@@ -600,7 +600,10 @@ def finance_transactions(user_id: str = Depends(auth.get_current_user_id)) -> li
 
 @app.get("/api/finance/summary", response_model=FinanceSummaryOut)
 def finance_summary(user_id: str = Depends(auth.get_current_user_id)) -> dict:
-    return tools.get_finance_summary_impl(user_id)
+    # The agent's summary names the net flow explicitly (so the model never
+    # passes it off as the card balance); the panel's schema calls it `balance`.
+    summary = tools.get_finance_summary_impl(user_id)
+    return {**summary, "balance": summary["net_flow_income_minus_expense"]}
 
 
 @app.get("/api/settings", response_model=SettingsOut)

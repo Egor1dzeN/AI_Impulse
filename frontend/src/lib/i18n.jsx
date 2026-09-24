@@ -201,7 +201,8 @@ const STRINGS = {
       weightLine: 'Вес: {value} кг, {date}',
     },
     financePanel: {
-      balance: 'Баланс',
+      balance: 'Поступления − траты',
+      cardBalance: 'Остаток на карте',
       totalIncome: 'Пополнения',
       totalExpense: 'Траты',
       noTransactions: 'Пока нет ни одной записи о тратах или пополнениях.',
@@ -439,7 +440,8 @@ const STRINGS = {
       weightLine: 'Weight: {value} kg, {date}',
     },
     financePanel: {
-      balance: 'Balance',
+      balance: 'Income − expenses',
+      cardBalance: 'Card balance',
       totalIncome: 'Income',
       totalExpense: 'Expenses',
       noTransactions: 'No expenses or income logged yet.',

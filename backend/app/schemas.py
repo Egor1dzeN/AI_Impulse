@@ -95,7 +95,8 @@ class TransactionOut(BaseModel):
 class FinanceSummaryOut(BaseModel):
     total_expense: float
     total_income: float
-    balance: float
+    balance: float  # net flow: income − expense over the imported period (not money on the card)
+    card_balance: dict[str, Any] | None = None  # {value, as_of, note} from the latest bank notification
     by_month: dict[str, dict[str, float]]
     expense_by_category: dict[str, float]
     income_by_category: dict[str, float]

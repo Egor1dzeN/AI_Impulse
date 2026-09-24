@@ -62,6 +62,14 @@ _SECRET_KV_RE = re.compile(
     r"token|токен\w*|api[_ \-]?key|апи[- ]?ключ\w*|secret|секрет\w*|client[_ ]secret|access[_ ]key|ключ доступа)"
     r"(\s*[:=]\s*|\s+)([^\s,;\[]{4,})"
 )
+# "Пароль от почты: Qwerty!2026", "token for GitHub = abc…": a qualifier between
+# the key word and the colon hid the value from _SECRET_KV_RE (it took "от" as
+# the value and, seeing no digits, left the line alone).
+_SECRET_KV_QUALIFIED_RE = re.compile(
+    r"(?i)\b(парол\w*|password|passwd|pin(?:-?код)?|пин(?:-?код)?|token|токен\w*|api[_ \-]?key|апи[- ]?ключ\w*|"
+    r"secret|секрет\w*|ключ\w* доступа|access[_ ]key|код\w* из смс)"
+    r"([^\n:=\[]{1,30}?)(\s*[:=]\s*)([^\s,;\[]{4,})"
+)
 _KNOWN_TOKEN_RES = [
     re.compile(r"\bsk-[A-Za-z0-9_\-]{16,}\b"),
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
@@ -107,6 +115,7 @@ def mask_sensitive(text: str) -> str:
         return text
     text = _CVV_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}[скрыто]", text)
     text = _URL_SECRET_RE.sub(lambda m: f"{m.group(1)}[скрыто]", text)
+    text = _SECRET_KV_QUALIFIED_RE.sub(lambda m: f"{m.group(1)}{m.group(2)}{m.group(3)}[скрыто]", text)
     text = _SECRET_KV_RE.sub(_mask_secret_kv, text)
     for pattern in _KNOWN_TOKEN_RES:
         text = pattern.sub("[секрет скрыт]", text)

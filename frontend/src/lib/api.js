@@ -246,27 +246,3 @@ export function exportMemories() {
   });
 }
 
-export function fetchTelegramStatus() {
-  return fetch(`${BASE}/api/telegram/status`, { headers: authHeaders() }).then(json);
-}
-
-// kind: 'private' (deep link t.me/<bot>?start=CODE) or 'group' (/connect CODE in the group)
-export function createTelegramConnectCode(kind = 'private') {
-  return fetch(`${BASE}/api/telegram/connect-code`, {
-    method: 'POST',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ kind }),
-  }).then(json);
-}
-
-export function disconnectTelegram() {
-  return fetch(`${BASE}/api/telegram/disconnect`, { method: 'POST', headers: authHeaders() }).then(json);
-}
-
-export function sendTelegramMessage({ draftId, chatId, text }) {
-  return fetch(`${BASE}/api/telegram/send`, {
-    method: 'POST',
-    headers: authHeaders({ 'Content-Type': 'application/json' }),
-    body: JSON.stringify({ draft_id: draftId, chat_id: chatId, text }),
-  }).then(json);
-}

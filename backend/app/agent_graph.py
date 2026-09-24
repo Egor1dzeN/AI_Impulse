@@ -61,7 +61,7 @@ _EXPLICIT_CALENDAR_RE = re.compile(
 _GUARDED_TOOLS: dict[str, re.Pattern[str]] = {
     **{name: _EXPLICIT_WRITE_RE for name in
        ("log_meal", "log_weight", "add_expense", "add_income", "create_task", "update_transaction")},
-    **{name: _EXPLICIT_MESSAGE_RE for name in ("draft_email", "draft_telegram_message")},
+    **{name: _EXPLICIT_MESSAGE_RE for name in ("draft_email",)},
     **{name: _EXPLICIT_CALENDAR_RE for name in ("create_calendar_event", "update_calendar_event", "delete_calendar_event")},
 }
 _BLOCKED_NOTE = (

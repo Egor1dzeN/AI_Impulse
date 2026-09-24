@@ -129,12 +129,3 @@ class UpdateSettingsRequest(BaseModel):
     # None = leave as-is, "" = disconnect, non-empty = connect/replace.
     intervals_icu_api_key: str | None = None
 
-
-class TelegramConnectCodeRequest(BaseModel):
-    kind: str = "private"  # "private" | "group"
-
-
-class TelegramSendRequest(BaseModel):
-    draft_id: str
-    chat_id: int
-    text: str

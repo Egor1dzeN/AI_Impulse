@@ -88,8 +88,6 @@ DATA_INSTRUCTIONS = (
     "- Входящие, неотвеченные, срочные письма → inbox_overview (user_replied, deadline.status); "
     "найти письмо по теме/человеку → search_emails, полный текст → get_email_thread.\n"
     "- С кем чаще общаюсь → top_contacts (scope work/personal).\n"
-    "- Telegram (если подключён бот): чаты → telegram_chats, сообщения → telegram_messages, написать в чат → "
-    "draft_telegram_message (только черновик на подтверждение; писать можно лишь в подключённые чаты).\n"
     "- Подписки, автосписания, «что спишется до конца месяца», регулярные платежи → recurring_payments.\n"
     "- Баланс/остаток на карте → get_finance_summary, поле card_balance (остаток по последнему банковскому "
     "уведомлению, назови дату). Не путай с доход−расход.\n"

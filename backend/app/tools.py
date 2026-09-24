@@ -692,7 +692,12 @@ def get_workout_route_impl(api_key: str, workout_id: str) -> dict[str, Any]:
 
     map_resp = requests.get(f"{INTERVALS_ICU_BASE_URL}/activity/{workout_id}/map", auth=auth, timeout=10)
     map_resp.raise_for_status()
-    points = map_resp.json().get("latlngs") or []
+    # GPS gaps come back as null entries; a null in the track crashed the map card.
+    points = [
+        p for p in (map_resp.json().get("latlngs") or [])
+        if isinstance(p, (list, tuple)) and len(p) >= 2
+        and all(isinstance(v, (int, float)) for v in p[:2])
+    ]
 
     summary = {
         "found": True,

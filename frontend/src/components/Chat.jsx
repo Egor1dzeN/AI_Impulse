@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { Component, useEffect, useRef, useState } from 'react';
 import { md } from '../lib/markdown';
 import { getLanguage, translate, useI18n } from '../lib/i18n.jsx';
 import { confirmCalendarAction, sendEmail } from '../lib/api';
@@ -152,15 +152,40 @@ function RouteEmbed({ action }) {
 // logged manually via log_workout) — the tool's own instructions have the
 // model describe the workout in plain text for that case instead, so there
 // is nothing here for this component to add.
+// One malformed tool result used to crash the whole app (black screen on
+// every load of that conversation): an embed that throws now just vanishes.
+class EmbedBoundary extends Component {
+  constructor(props) {
+    super(props);
+    this.state = { failed: false };
+  }
+
+  static getDerivedStateFromError() {
+    return { failed: true };
+  }
+
+  componentDidCatch(error) {
+    console.error('embed failed to render', error);
+  }
+
+  render() {
+    return this.state.failed ? null : this.props.children;
+  }
+}
+
 function WorkoutRouteEmbed({ action }) {
   const { t } = useI18n();
   if (!action || action.tool !== 'get_workout_route') return null;
   const result = action.result;
-  if (!result || !result.has_route || !result.points || result.points.length < 2) return null;
+  if (!result || !result.has_route || !Array.isArray(result.points)) return null;
 
   const { name, date, distance_km, duration_min, points, workout_id } = result;
-  // Intervals.icu returns [lat, lon] pairs; Mapbox wants [lon, lat].
-  const routeGeometry = points.map(([lat, lon]) => [lon, lat]);
+  // Intervals.icu returns [lat, lon] pairs (null for GPS gaps — history saved
+  // before the backend filtered them still has them); Mapbox wants [lon, lat].
+  const routeGeometry = points
+    .filter((p) => Array.isArray(p) && Number.isFinite(p[0]) && Number.isFinite(p[1]))
+    .map(([lat, lon]) => [lon, lat]);
+  if (routeGeometry.length < 2) return null;
   const markers = [
     { lonlat: routeGeometry[0], color: ORIGIN_MARKER_COLOR },
     { lonlat: routeGeometry[routeGeometry.length - 1], color: DEST_MARKER_COLOR },
@@ -628,12 +653,16 @@ export default function Chat({ messages, memoryProgress, scrollSignal, smoothScr
                   />
                 )}
               </div>
-              {m.status === 'done' && <MapEmbed action={m.action} />}
-              {m.status === 'done' && <RouteEmbed action={m.action} />}
-              {m.status === 'done' && <WorkoutRouteEmbed action={m.action} />}
-              {m.status === 'done' && <EmailDraftEmbed action={m.action} />}
-              {m.status === 'done' && <CalendarActionEmbed action={m.action} />}
-              {m.status === 'done' && <ActionBadge action={m.action} />}
+              {m.status === 'done' && (
+                <EmbedBoundary>
+                  <MapEmbed action={m.action} />
+                  <RouteEmbed action={m.action} />
+                  <WorkoutRouteEmbed action={m.action} />
+                  <EmailDraftEmbed action={m.action} />
+                  <CalendarActionEmbed action={m.action} />
+                  <ActionBadge action={m.action} />
+                </EmbedBoundary>
+              )}
               {m.status === 'done' && <Copy text={m.content} />}
             </div>
           )}

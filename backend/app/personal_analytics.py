@@ -208,8 +208,25 @@ def _occurrence(row: dict[str, Any], s: datetime, e: datetime) -> dict[str, Any]
         "organizer": {"name": row["organizer_name"], "email": row["organizer_email"]},
         "attendees": attendees,
         "recurring": bool(row["series_id"] or row["recurrence_json"]),
+        "event_timezone": row["timezone"],
         "security": _security(row["flags_json"]),
     }
+
+
+def _foreign_time(o: dict[str, Any]) -> dict[str, Any]:
+    """An event set in another timezone: `time` is ALREADY the user's local
+    time; the original is shown separately so the model doesn't convert twice."""
+    tzname = o.get("event_timezone")
+    if not tzname or tzname == str(o["start"].tzinfo):
+        return {}
+    try:
+        from zoneinfo import ZoneInfo
+        there = o["start"].astimezone(ZoneInfo(tzname))
+    except Exception:  # noqa: BLE001
+        return {}
+    if there.utcoffset() == o["start"].utcoffset():
+        return {}
+    return {"time_note": f"time уже по времени пользователя; у организатора это {there:%H:%M} ({tzname}) — второй раз не пересчитывай"}
 
 
 def _event_public(o: dict[str, Any], with_description: bool = True, own_emails: set[str] | None = None) -> dict[str, Any]:
@@ -223,6 +240,7 @@ def _event_public(o: dict[str, Any], with_description: bool = True, own_emails: 
         "weekday": WEEKDAYS_RU[o["start"].weekday()],
         "time": ("весь день" + (f", по {(o['end'] - timedelta(days=1)):%d.%m} включительно" if (o["end"] - o["start"]).days > 1 else ""))
         if o["all_day"] else f"{o['start']:%H:%M}–{o['end']:%H:%M}",
+        **(_foreign_time(o) if not o["all_day"] else {}),
         "start": o["start"].isoformat(),
         "end": o["end"].isoformat(),
         "summary": o["summary"],
@@ -621,6 +639,9 @@ def _email_patterns(user_id: str) -> list[dict[str, Any]]:
                          _occurrences(user_id, s0, s0 + timedelta(hours=1)) if o["busy"] and not o["all_day"]]
         patterns.append({
             "NEXT_OCCURRENCE_CONFLICTS": conflicts,
+            "NEXT_OCCURRENCE_SUMMARY": (f"Ближайшее: {WEEKDAYS_RU[upcoming[0].weekday()]} {upcoming[0]:%d.%m} в {clock}; "
+                                        + (f"пересекается с {', '.join(conflicts)}" if conflicts else "пересечений в календаре нет"))
+            if upcoming and clock else None,
             "NEXT_OCCURRENCE": f"{upcoming[0]:%d.%m} ({WEEKDAYS_RU[upcoming[0].weekday()]}) {clock}".strip() if upcoming else None,
             "next_dates": [f"{d:%d.%m} ({WEEKDAYS_RU[d.weekday()]})" for d in upcoming],
             "sender": f"{items[0]['from_name']} <{sender}>",
@@ -895,7 +916,13 @@ def search_emails(
         else:
             item["written_by_user"] = True
         emails.append(item)
-    return {"query": query, "total_matches": len(rows), "emails": emails,
+    verdict = None
+    best_in = next((e for e in emails if e.get("user_replied") is not None), None)
+    if terms and best_in:
+        verdict = (f"Лучшее совпадение — входящее «{best_in['subject']}» от {best_in['from']} ({str(best_in['date'])[:10]}): "
+                   + ("пользователь ОТВЕТИЛ на это письмо." if best_in["user_replied"] else
+                      "пользователь НЕ отвечал на это письмо (ответы на другие письма того же человека не в счёт)."))
+    return {"BEST_MATCH_REPLY_STATUS": verdict, "query": query, "total_matches": len(rows), "emails": emails,
             "note": "user_replied относится только к этому конкретному письму (ответ в той же ветке)."}
 
 
@@ -1218,7 +1245,11 @@ def finance_report(
     if categories:
         wanted = [_norm(c) for c in categories if c.strip()]
         available = {r["category"] for r in rows}
-        matched = {c for c in available if any(w in _norm(c) or _norm(c) in w for w in wanted)}
+        # Word-start match: "спорт" must not pull in "транСПОРТ".
+        def hits(w: str, c: str) -> bool:
+            c = _norm(c)
+            return w == c or bool(re.search(rf"(?<![а-яёa-z]){re.escape(w)}", c)) or bool(re.search(rf"(?<![а-яёa-z]){re.escape(c)}", w))
+        matched = {c for c in available if any(hits(w, c) for w in wanted)}
         # "Кафе/рестораны/общепит" is a broad ask: it always covers every eating-out
         # category (coffee shops included), whichever subset the caller spelled out.
         if any(_BROAD_EATING_OUT.search(w) for w in wanted):
@@ -1242,7 +1273,10 @@ def finance_report(
         by_merchant[r["merchant"] or r["note"] or "—"] += r["amount"]
         merchant_count[r["merchant"] or r["note"] or "—"] += 1
 
+    months_in_period = max(1, (end.year - start.year) * 12 + end.month - start.month + 1)
     result = {
+        "AVERAGE_PER_MONTH": round(sum(r["amount"] for r in rows) / months_in_period, 2)
+        if period != "all" or date_from or date_to else None,
         "period": _period_payload(start, end) if period != "all" or date_from or date_to else "весь период данных",
         "kind": kind,
         "filters": {"categories_requested": categories, "categories_used": categories_used, "merchant": merchant},

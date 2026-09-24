@@ -64,7 +64,17 @@ def decode_access_token(token: str) -> str:
     return payload["sub"]
 
 
-def register_user(username: str, password: str) -> tuple[str, str]:
+def check_invite_code(code: str | None) -> None:
+    """A public stand shouldn't let anyone sign up and spend the GigaChat
+    quota. With REGISTRATION_CODE set, new accounts (password or Google)
+    need it; unset means open registration, as before."""
+    expected = os.environ.get("REGISTRATION_CODE", "").strip()
+    if expected and not secrets.compare_digest((code or "").strip(), expected):
+        raise HTTPException(status_code=403, detail="invalid_invite_code")
+
+
+def register_user(username: str, password: str, invite_code: str | None = None) -> tuple[str, str]:
+    check_invite_code(invite_code)
     username = username.strip()
     if not username or not password:
         raise HTTPException(status_code=400, detail="username and password are required")
@@ -115,7 +125,9 @@ def _unique_username(base: str, conn: sqlite3.Connection) -> str:
     return candidate
 
 
-def login_or_register_google_user(google_id: str, email: str, name: str | None) -> tuple[str, str]:
+def login_or_register_google_user(
+    google_id: str, email: str, name: str | None, invite_code: str | None = None
+) -> tuple[str, str]:
     with db.get_conn() as conn:
         row = conn.execute(
             "SELECT id, username FROM users WHERE google_id = ?",
@@ -123,6 +135,8 @@ def login_or_register_google_user(google_id: str, email: str, name: str | None) 
         ).fetchone()
         if row is not None:
             return row["id"], create_access_token(row["id"], row["username"])
+        # Only creating a new account needs the invite code.
+        check_invite_code(invite_code)
 
         user_id = db.new_id()
         username = _unique_username((name or email.split("@")[0]).strip(), conn)

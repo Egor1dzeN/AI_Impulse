@@ -21,6 +21,7 @@ class ConversationOut(BaseModel):
 class RegisterRequest(BaseModel):
     username: str
     password: str
+    invite_code: str | None = None
 
 
 class LoginRequest(BaseModel):
@@ -30,6 +31,7 @@ class LoginRequest(BaseModel):
 
 class GoogleLoginRequest(BaseModel):
     id_token: str
+    invite_code: str | None = None
 
 
 class TokenOut(BaseModel):

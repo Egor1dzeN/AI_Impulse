@@ -7,6 +7,9 @@ export default function Login({ onAuthed }) {
   const [mode, setMode] = useState('login');
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');
+  const [inviteCode, setInviteCode] = useState('');
+  const inviteRef = useRef('');
+  inviteRef.current = inviteCode;
   const [error, setError] = useState('');
   const [busy, setBusy] = useState(false);
   const [showOther, setShowOther] = useState(false);
@@ -20,10 +23,10 @@ export default function Login({ onAuthed }) {
     async function handleGoogleCredential(response) {
       setError('');
       try {
-        await loginWithGoogle(response.credential);
+        await loginWithGoogle(response.credential, inviteRef.current);
         onAuthed();
       } catch (err) {
-        setError(err.message || t('login.googleError'));
+        setError(err.message === 'invalid_invite_code' ? t('login.inviteInvalid') : (err.message || t('login.googleError')));
       }
     }
 
@@ -60,11 +63,11 @@ export default function Login({ onAuthed }) {
       if (mode === 'login') {
         await login(username.trim(), password);
       } else {
-        await register(username.trim(), password);
+        await register(username.trim(), password, inviteCode.trim());
       }
       onAuthed();
     } catch (err) {
-      setError(err.message || t('login.loginError'));
+      setError(err.message === 'invalid_invite_code' ? t('login.inviteInvalid') : (err.message || t('login.loginError')));
     } finally {
       setBusy(false);
     }
@@ -114,6 +117,13 @@ export default function Login({ onAuthed }) {
             />
           </label>
 
+          {mode === 'register' && (
+            <label className="auth__field">
+              <span>{t('login.inviteCode')}</span>
+              <input type="text" autoComplete="off" value={inviteCode} onChange={(e) => setInviteCode(e.target.value)} />
+            </label>
+          )}
+
           {error && <p className="auth__error">{error}</p>}
 
           <button className="auth__submit" type="submit" disabled={busy}>
@@ -143,6 +153,13 @@ export default function Login({ onAuthed }) {
         ) : (
           <>
             <div className="auth__divider">{t('login.or')}</div>
+            {mode !== 'register' && (
+              <label className="auth__field">
+                <span>{t('login.inviteCode')}</span>
+                <input type="text" autoComplete="off" placeholder={t('login.inviteHint')} value={inviteCode}
+                       onChange={(e) => setInviteCode(e.target.value)} />
+              </label>
+            )}
             <div className="auth__google" ref={googleRef} />
           </>
         )}

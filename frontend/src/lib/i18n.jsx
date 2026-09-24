@@ -153,6 +153,9 @@ const STRINGS = {
       or: 'или',
       googleError: 'Не получилось войти через Google.',
       loginError: 'Не получилось войти. Попробуйте ещё раз.',
+      inviteCode: 'Код приглашения',
+      inviteHint: 'Нужен только для нового аккаунта (в том числе через Google)',
+      inviteInvalid: 'Неверный код приглашения.',
     },
     chatList: {
       noChats: 'Пока нет ни одного чата.',
@@ -377,6 +380,9 @@ const STRINGS = {
       or: 'or',
       googleError: "Couldn't sign in with Google.",
       loginError: "Couldn't sign in. Please try again.",
+      inviteCode: 'Invite code',
+      inviteHint: 'Only needed for a new account (Google sign-up too)',
+      inviteInvalid: 'Invalid invite code.',
     },
     chatList: {
       noChats: 'No chats yet.',

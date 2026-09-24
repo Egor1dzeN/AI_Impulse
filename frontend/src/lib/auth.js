@@ -12,11 +12,11 @@ async function json(res) {
   return res.json();
 }
 
-export async function register(username, password) {
+export async function register(username, password, inviteCode) {
   const { access_token } = await fetch(`${BASE}/api/auth/register`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ username, password }),
+    body: JSON.stringify({ username, password, invite_code: inviteCode || null }),
   }).then(json);
   localStorage.setItem(TOKEN_KEY, access_token);
 }
@@ -30,11 +30,11 @@ export async function login(username, password) {
   localStorage.setItem(TOKEN_KEY, access_token);
 }
 
-export async function loginWithGoogle(idToken) {
+export async function loginWithGoogle(idToken, inviteCode) {
   const { access_token } = await fetch(`${BASE}/api/auth/google`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ id_token: idToken }),
+    body: JSON.stringify({ id_token: idToken, invite_code: inviteCode || null }),
   }).then(json);
   localStorage.setItem(TOKEN_KEY, access_token);
 }

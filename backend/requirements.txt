@@ -28,3 +28,4 @@ ddgs
 tzdata
 python-dateutil
 pypdf
+python-dotenv

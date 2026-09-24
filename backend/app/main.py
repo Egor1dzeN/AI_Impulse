@@ -81,7 +81,7 @@ def health() -> dict:
 
 @app.post("/api/auth/register", response_model=TokenOut)
 def register(req: RegisterRequest) -> dict:
-    _, token = auth.register_user(req.username, req.password)
+    _, token = auth.register_user(req.username, req.password, req.invite_code)
     return {"access_token": token}
 
 
@@ -98,6 +98,7 @@ def google_login(req: GoogleLoginRequest) -> dict:
         google_id=claims["sub"],
         email=claims.get("email", ""),
         name=claims.get("name"),
+        invite_code=req.invite_code,
     )
     return {"access_token": token}
 

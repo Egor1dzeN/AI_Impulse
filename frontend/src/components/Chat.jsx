@@ -210,7 +210,9 @@ function WorkoutRouteEmbed({ action }) {
 function EmailDraftEmbed({ action }) {
   const { t } = useI18n();
   const [status, setStatus] = useState('idle'); // idle | sending | sent | error
-  const draft = action?.tool === 'draft_email' ? action.result : null;
+  const result = action?.tool === 'draft_email' ? action.result : null;
+  // A refused call ("НЕ ВЫПОЛНЕНО…" string) is not a draft — no card for it.
+  const draft = result && typeof result === 'object' && (result.to || result.body) ? result : null;
   // Seeded once from the tool's draft, then freely editable — onSend always
   // uses this local copy, never the original draft.* values, so edits
   // actually take effect.
@@ -381,7 +383,10 @@ function CalendarDeleteEmbed({ draft }) {
 // when the user presses Confirm here, via POST /api/calendar/confirm.
 function CalendarActionEmbed({ action }) {
   const { t } = useI18n();
-  const draft = CALENDAR_DRAFT_TOOLS.includes(action?.tool) ? action.result : null;
+  // Only a real draft: a call the guard refused comes back as a plain
+  // "НЕ ВЫПОЛНЕНО…" string, and a card built from it had no draft_id (422).
+  const result = CALENDAR_DRAFT_TOOLS.includes(action?.tool) ? action.result : null;
+  const draft = result && typeof result === 'object' && result.draft_id ? result : null;
   const [status, setStatus] = useState('idle'); // idle | applying | done | cancelled | error
   const [title, setTitle] = useState(draft?.title || '');
   const [startTime, setStartTime] = useState(toInputDatetime(draft?.start_time));

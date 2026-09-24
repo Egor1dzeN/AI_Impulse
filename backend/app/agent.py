@@ -298,9 +298,12 @@ def handle_chat_turn_stream(
                                 yield {"type": "tool_call", "tool": name, "arguments": arguments}
                                 if name not in used_tools:
                                     used_tools.append(name)
-                                if name not in MEMORY_TOOL_NAMES:
+                                # A call the graph's guards refused did nothing: it must not
+                                # become the turn's action (the UI drew a draft card from it).
+                                refused = isinstance(result, str) and result.startswith("НЕ ВЫПОЛНЕНО")
+                                if name not in MEMORY_TOOL_NAMES and not refused:
                                     last_action = {"tool": name, "arguments": arguments, "result": result}
-                                if name in ACTION_TOOL_NAMES:
+                                if name in ACTION_TOOL_NAMES and not refused:
                                     action_tools.add(name)
                                 if name == "web_search" and isinstance(result, dict):
                                     # Flattened in call order across every

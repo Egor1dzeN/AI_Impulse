@@ -1255,7 +1255,15 @@ def finance_report(
         if any(_BROAD_EATING_OUT.search(w) for w in wanted):
             matched |= {c for c in available if _EATING_OUT_CATEGORY.search(_norm(c))}
         categories_used = sorted(matched)
-        rows = [r for r in rows if r["category"] in matched]
+        if matched:
+            rows = [r for r in rows if r["category"] in matched]
+        else:
+            # No such category ("Аптеки" when the bank files pharmacies under
+            # "Здоровье"): look for the word in merchant names instead of
+            # answering "0 ₽, покупок не было".
+            stems = [w[: max(4, len(w) - 2)] for w in wanted if len(w) >= 4]
+            rows = [r for r in rows if any(s in _norm(f"{r['merchant'] or ''} {r['note'] or ''}") for s in stems)]
+            categories_used = [f"нет такой категории — найдено по названию места: {', '.join(categories)}"]
     if merchant:
         m = _norm(merchant)
         rows = [r for r in rows if m in _norm(f"{r['merchant'] or ''} {r['note'] or ''}")]

@@ -67,8 +67,13 @@ def _calendar_items(user_id: str) -> list[dict[str, Any]]:
     occ = analytics._occurrences(user_id, datetime.combine(tomorrow, time(0), tz),
                                  datetime.combine(tomorrow + timedelta(days=1), time(0), tz))
     timed = [o for o in occ if not o["all_day"] and o["busy"]]
+    def flexible(o: dict[str, Any]) -> bool:
+        # A personal low-importance block (lunch, focus time) overlapping a
+        # meeting is not a conflict worth raising.
+        return (o["importance"] or "") in ("low", "personal") and not any(not x.get("self") for x in o["attendees"])
+
     for a, b in zip(timed, timed[1:]):
-        if b["start"] < a["end"]:
+        if b["start"] < a["end"] and not flexible(a) and not flexible(b):
             items.append(_item(
                 "high", "calendar", f"Накладка завтра: «{a['summary']}» и «{b['summary']}»",
                 f"{a['start']:%H:%M}–{a['end']:%H:%M} пересекается с {b['start']:%H:%M}–{b['end']:%H:%M}.",

@@ -329,7 +329,15 @@ def ingest_calendar_event(user_id: str, event: dict[str, Any]) -> None:
     attendee_names = ", ".join(a.get("displayName") or a.get("email", "") for a in attendees)
 
     parts = [f"Событие в календаре: «{summary}»."]
-    if start_str:
+    if start.get("date") and not start.get("dateTime"):
+        # All-day: Google's end date is exclusive — a 3–4 Oct conference ends "2026-10-05".
+        from datetime import date as _d, timedelta as _td
+        try:
+            last = (_d.fromisoformat(end_str[:10]) - _td(days=1)).isoformat() if end_str else start_str
+        except ValueError:
+            last = end_str
+        parts.append(f"Весь день: {start_str}" + (f" — {last} включительно" if last and last != start_str else "") + ".")
+    elif start_str:
         parts.append(f"Начало: {start_str}" + (f", окончание: {end_str}" if end_str else "") + ".")
     if location:
         parts.append(f"Место: {location}.")

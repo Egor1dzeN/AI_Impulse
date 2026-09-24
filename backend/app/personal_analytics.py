@@ -221,7 +221,8 @@ def _event_public(o: dict[str, Any], with_description: bool = True, own_emails: 
         "id": o["id"],
         "date": o["start"].date().isoformat(),
         "weekday": WEEKDAYS_RU[o["start"].weekday()],
-        "time": "весь день" if o["all_day"] else f"{o['start']:%H:%M}–{o['end']:%H:%M}",
+        "time": ("весь день" + (f", по {(o['end'] - timedelta(days=1)):%d.%m} включительно" if (o["end"] - o["start"]).days > 1 else ""))
+        if o["all_day"] else f"{o['start']:%H:%M}–{o['end']:%H:%M}",
         "start": o["start"].isoformat(),
         "end": o["end"].isoformat(),
         "summary": o["summary"],
@@ -610,7 +611,17 @@ def _email_patterns(user_id: str) -> list[dict[str, Any]]:
         today = now_local(user_id).date()
         regular_days = [WEEKDAYS_RU.index(d) for d, n in weekday_counter.items() if n >= 2]
         upcoming = sorted(today + timedelta(days=k) for k in range(1, 8) if (today + timedelta(days=k)).weekday() in regular_days)
+        clock = time_counter.most_common(1)[0][0] if time_counter else ""
+        conflicts: list[str] = []
+        if upcoming and clock:
+            tz = user_timezone(user_id)
+            h, m = (int(x) for x in clock.split(":"))
+            s0 = datetime.combine(upcoming[0], time(h, m), tz)
+            conflicts = [f"«{o['summary']}» {o['start']:%H:%M}–{o['end']:%H:%M}" for o in
+                         _occurrences(user_id, s0, s0 + timedelta(hours=1)) if o["busy"] and not o["all_day"]]
         patterns.append({
+            "NEXT_OCCURRENCE_CONFLICTS": conflicts,
+            "NEXT_OCCURRENCE": f"{upcoming[0]:%d.%m} ({WEEKDAYS_RU[upcoming[0].weekday()]}) {clock}".strip() if upcoming else None,
             "next_dates": [f"{d:%d.%m} ({WEEKDAYS_RU[d.weekday()]})" for d in upcoming],
             "sender": f"{items[0]['from_name']} <{sender}>",
             "subject_example": items[-1]["subject"],
@@ -1237,6 +1248,9 @@ def finance_report(
         "filters": {"categories_requested": categories, "categories_used": categories_used, "merchant": merchant},
         "total": round(sum(r["amount"] for r in rows), 2),
         "transactions_count": len(rows),
+        # Over the calendar months of the period (a month without spending counts as 0).
+        "average_per_month": round(sum(r["amount"] for r in rows) / max(1, (end.year - start.year) * 12 + end.month - start.month + 1), 2)
+        if period != "all" or date_from or date_to else None,
         "by_month": {k: round(v, 2) for k, v in sorted(by_month.items())},
         "by_category": {k: round(v, 2) for k, v in sorted(by_category.items(), key=lambda kv: -kv[1])},
         "by_month_and_category": {m: {c: round(v, 2) for c, v in cats.items()} for m, cats in sorted(by_month_category.items())},

@@ -346,7 +346,8 @@ class Gen:
         bd = date.fromisoformat(p["birth"])
         self.email("2026-06-03T10:30:00", "Актуализация данных для ДМС",
                    f"{p['first']}, добрый день! Проверьте данные для продления полиса ДМС:\nФИО: {p['last']} {p['first']} {p['patronymic']}\n"
-                   f"Дата рождения: {bd:%d.%m.%Y}\nГород: {p['city']}\nПаспорт: {p['passport']}\nДолжность: {p['role']}\n"
+                   + ("" if p.get("no_hr_birthday") else f"Дата рождения: {bd:%d.%m.%Y}\n")
+                   + f"Город: {p['city']}\nПаспорт: {p['passport']}\nДолжность: {p['role']}\n"
                    f"Руководитель: {p['manager'][0]}\nЕсли всё верно — ничего делать не нужно.\n\nОтдел персонала {p['company']}", hr)
         # спорт — брони (регулярное вне календаря)
         sp = p["sport"]
@@ -364,11 +365,12 @@ class Gen:
         # фитнес-приложение: старая и новая норма
         f = p["fitness"]
         fs = {"name": f["app"], "email": f["sender"]}
-        self.email("2026-06-05T09:00:00", f"{f['app']}: итоги мая",
-                   f"{p['first']}, итоги мая.\nВес: {f['old_weight']} кг. Цель: {f['old_goal']}.\nДневная норма калорий: {rub(f['old_norm'])[:-2]} ккал.", fs)
-        self.email("2026-09-06T09:00:00", f"{f['app']}: итоги августа",
-                   f"{p['first']}, итоги августа.\nВес: {f['new_weight']} кг. Новая цель: {f['new_goal']}.\n"
-                   f"Дневная норма калорий пересчитана: {rub(f['new_norm'])[:-2]} ккал.", fs)
+        if not p.get("fitness_via_coach"):  # иначе норма и вес — в чате с тренером (gen_telegram)
+            self.email("2026-06-05T09:00:00", f"{f['app']}: итоги мая",
+                       f"{p['first']}, итоги мая.\nВес: {f['old_weight']} кг. Цель: {f['old_goal']}.\nДневная норма калорий: {rub(f['old_norm'])[:-2]} ккал.", fs)
+            self.email("2026-09-06T09:00:00", f"{f['app']}: итоги августа",
+                       f"{p['first']}, итоги августа.\nВес: {f['new_weight']} кг. Новая цель: {f['new_goal']}.\n"
+                       f"Дневная норма калорий пересчитана: {rub(f['new_norm'])[:-2]} ккал.", fs)
         self.truth["fitness"] = f
         # конференция, подработка, подписка, рассылки
         conf = p["conference"]
@@ -509,6 +511,14 @@ class Gen:
             self.tg("chat_team", t, who, text, False)
             if self.rnd.random() < 0.5:
                 self.tg("chat_team", t + timedelta(minutes=4), me, self.rnd.choice(["Посмотрю", "Ок", "👍", "Обсудим на встрече"]), True)
+        if p.get("fitness_via_coach"):
+            f, coach = p["fitness"], p["sport"]["coach"]
+            self.dialog("chat_coach", coach, self.dt(date(2026, 6, 5), 10), [
+                ("o", f"{me}, по итогам мая: вес {str(f['old_weight']).replace('.', ',')} кг, цель — {f['old_goal']}. "
+                      f"Норма на день — {f['old_norm']} ккал."), ("me", "Поняла, стараюсь" if self.female else "Понял, стараюсь")])
+            self.dialog("chat_coach", coach, self.dt(date(2026, 9, 6), 10), [
+                ("o", f"{me}, пересчитали план: сейчас вес {str(f['new_weight']).replace('.', ',')} кг, новая цель — {f['new_goal']}. "
+                      f"Теперь дневная норма {f['new_norm']} ккал."), ("me", "Отлично, спасибо!")])
         for i in range(15):
             day = self.dt(date(2026, 1, 10) + timedelta(days=13 * i), 20)
             chat, who = (pchat, par["name"]) if i % 2 else (fchat, fr["name"])
@@ -719,7 +729,8 @@ def build_questions(g: Gen):
     tt = t["tomorrow_travel"]
     q("T9", "Между какими завтрашними встречами я могу не успеть доехать?",
       "Проверь мои встречи на завтра: где есть риск опоздать из-за разных адресов?",
-      [re.escape(tt["first"].split()[0]) + "|" + re.escape(p["client"]["company"]), re.escape(tt["second"].split()[0])],
+      [re.escape(tt["first"].split()[0][:-2]) + "|" + re.escape(p["client"]["company"]),
+       re.escape(tt["second"].split()[0][:-2]) + "|" + re.escape(tt["second_addr"].split(",")[1].strip()[:12])],
       ref=f"«{tt['first']}» ({tt['first_addr']}) → «{tt['second']}» ({tt['second_addr']}): 20 минут на дорогу — не успеть.")
     q("T10", f"Я заболел{gd('', 'а')}. Какие встречи завтра нужно отменить и кого предупредить?",
       f"Я приболел{gd('', 'а')}, завтра не выйду. Что у меня завтра и кому надо написать?",
@@ -734,10 +745,10 @@ def build_questions(g: Gen):
       [oz["local_time"].replace(":", "[:.]")], ref=f"{oz['date']} в {oz['local_time']} по местному ({oz['their_time']} по {oz['city']}).")
     si = p["side_income"]
     q("T13", "Какие у меня доходы помимо зарплаты?", f"Сколько я заработал{gd('', 'а')} на подработке?",
-      [num_re(si["amount"]), re.escape(si["company"].split("«")[-1].split("»")[0][:5])], ref=f"{rub(si['amount'])} от {si['company']} ({si['date']}), разово.")
+      [num_re(si["amount"]), re.escape(si["company"].split("«")[-1].split("»")[0][:5]) + "|подработ|договор|ГПХ|проект"], ref=f"{rub(si['amount'])} от {si['company']} ({si['date']}), разово.")
     conf = p["conference"]
     q("T14", f"Когда и где конференция {conf['name']}?", f"В каком городе и в какие даты {conf['name']} и когда мой доклад?",
-      [conf["dates_re"], conf["city_re"]], ref=f"{conf['dates_text']}, {conf['city']}; доклад {conf['talk_date']} {conf['talk_time']}.")
+      [conf["dates_re"] + f"|с {int(conf['start'][8:])} по {int(conf['end'][8:])}", conf["city_re"]], ref=f"{conf['dates_text']}, {conf['city']}; доклад {conf['talk_date']} {conf['talk_time']}.")
     mvv = t["moved_event"]
     nd = date.fromisoformat(mvv["new"])
     q("L1", f"Когда у меня «{mvv['summary']}»?", f"На какое число назначено «{mvv['summary']}»?",

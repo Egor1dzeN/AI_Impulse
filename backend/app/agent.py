@@ -18,7 +18,7 @@ from .tools import MEMORY_TOOL_NAMES
 # Each round of the agent loop is 2 super-steps (agent -> tools), so this
 # allows roughly 10 rounds of tool calls (memory searches and/or actions)
 # before the graph gives up and we fall back to a canned reply.
-RECURSION_LIMIT = 20
+RECURSION_LIMIT = 28
 
 logger = logging.getLogger(__name__)
 
@@ -68,8 +68,12 @@ ACTION_NOT_DONE_REPLY = (
 def claims_unperformed_action(user_message: str, reply: str, action_tools: set[str]) -> bool:
     """The user asked for an action, the reply says it's done, yet no
     action tool ran this turn."""
+    # "Какие встречи нужно отменить?" asks for a list — it is not an order.
+    asks = "?" in (user_message or "") and re.search(
+        r"(?i)\b(какие|какой|какая|что|кого|кому|когда|где|сколько|куда|ли)\b", user_message or "")
     return (
         not action_tools
+        and not asks
         and bool(_ACTION_REQUEST_RE.search(user_message or ""))
         and bool(_ACTION_CLAIM_RE.search(reply or ""))
     )

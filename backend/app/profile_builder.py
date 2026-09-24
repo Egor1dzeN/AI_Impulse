@@ -391,6 +391,9 @@ def _computed_facts(user_id: str) -> list[dict[str, Any]]:
     birthday = _birthday(user_id)
     if birthday:
         facts.append(birthday)
+    work = _work_fact(user_id)
+    if work:
+        facts.append(work)
 
     city = _home_city(user_id)
     if city:
@@ -473,6 +476,47 @@ def _birthday(user_id: str) -> dict[str, Any] | None:
                      "biography", "telegram", "Поздравления с днём рождения в Telegram", None)
     return _fact(f"День рождения пользователя — {day:02d}.{month:02d} (год не указан; поздравления приходят в этот день).",
                  "biography", "telegram", "Поздравления с днём рождения в Telegram", None)
+
+
+_FORM_LINE_RE = {
+    "role": re.compile(r"(?im)^\s*(?:должность|позиция)\s*[:—-]\s*(.+?)\s*$"),
+    "manager": re.compile(r"(?im)^\s*(?:руководитель|непосредственный руководитель)\s*[:—-]\s*(.+?)\s*$"),
+    "company": re.compile(r"(?im)^\s*(?:компания|организация|работодатель)\s*[:—-]\s*(.+?)\s*$"),
+    "team": re.compile(r"(?im)^\s*(?:отдел|подразделение|команда)\s*[:—-]\s*(.+?)\s*$"),
+}
+_HR_SIGNATURE_RE = re.compile(r"(?i)(?:отдел персонала|отдел кадров|служба персонала|hr[- ]служба|hr)\s+(?:компании\s+)?([«\"]?[A-ZА-ЯЁ][\w«»\"\- ]{1,40})")
+
+
+def _work_fact(user_id: str) -> dict[str, Any] | None:
+    """Job title, manager and employer from a form-like trusted letter (an HR
+    'please check your data' email). The LLM pass over work evidence came back
+    empty in one run, leaving the profile without the user's job at all."""
+    with db.get_conn() as conn:
+        emails = conn.execute(
+            "SELECT date, subject, body, from_name, flags_json FROM raw_emails WHERE user_id = ? AND direction = 'in' ORDER BY date DESC",
+            (user_id,),
+        ).fetchall()
+    for e in emails:
+        if not _security_ok(e["flags_json"]) or _unverified(e["flags_json"]):
+            continue
+        body = e["body"] or ""
+        found = {k: m.group(1).strip(" .") for k, r in _FORM_LINE_RE.items() if (m := r.search(body))}
+        if "role" not in found:
+            continue
+        if "company" not in found:
+            sig = _HR_SIGNATURE_RE.search(body) or _HR_SIGNATURE_RE.search(e["from_name"] or "")
+            if sig:
+                found["company"] = sig.group(1).strip(" .")
+        parts = [f"должность — {found['role']}"]
+        if found.get("company"):
+            parts.insert(0, f"компания — {found['company']}")
+        if found.get("team"):
+            parts.append(f"подразделение — {found['team']}")
+        if found.get("manager"):
+            parts.append(f"руководитель — {found['manager']}")
+        return _fact("Работа пользователя: " + "; ".join(parts) + ".", "work_goals", "email",
+                     f"Письмо «{e['subject']}»", (e["date"] or "")[:10])
+    return None
 
 
 def _data_span(user_id: str) -> tuple[str | None, str | None]:

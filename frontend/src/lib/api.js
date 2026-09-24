@@ -246,3 +246,8 @@ export function exportMemories() {
   });
 }
 
+
+// Read-only: MCP servers configured on the backend (backend/mcp_servers.json) and their status.
+export function fetchMcpStatus() {
+  return fetch(`${BASE}/api/mcp/status`, { headers: authHeaders() }).then(json);
+}

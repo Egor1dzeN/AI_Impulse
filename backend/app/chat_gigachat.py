@@ -102,7 +102,11 @@ def _flatten_property(prop: dict) -> dict:
 
 
 def tool_to_function(tool: BaseTool) -> Function:
-    schema = tool.args_schema.model_json_schema() if tool.args_schema else {}
+    # MCP tools carry a plain JSON-schema dict instead of a pydantic model.
+    if isinstance(tool.args_schema, dict):
+        schema = tool.args_schema
+    else:
+        schema = tool.args_schema.model_json_schema() if tool.args_schema else {}
     properties: dict[str, dict] = {}
 
     for name, prop in schema.get("properties", {}).items():

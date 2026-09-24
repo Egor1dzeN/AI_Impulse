@@ -74,6 +74,11 @@ async def on_startup() -> None:
     await mcp_tools.refresh_mcp_tools()
 
 
+@app.get("/api/mcp/status")
+def mcp_status(user_id: str = Depends(auth.get_current_user_id)) -> dict:
+    return {"servers": mcp_tools.get_status()}
+
+
 @app.get("/api/health")
 def health() -> dict:
     return {"status": "ok"}

@@ -83,8 +83,16 @@ def _block_unrequested_writes(state: MessagesState) -> tuple[list[ToolMessage], 
     text = (human.content if human and isinstance(human.content, str) else "").split("\n\nНе забудь посмотреть в память")[0]
     # An attached document is third-party text too — only the user's own words count.
     text = re.sub(r"=== Вложенный документ[\s\S]*?(=== Конец документа ===|$)", " ", text)
-    blocked = [tc for tc in last.tool_calls
-               if tc["name"] in _GUARDED_TOOLS and not _GUARDED_TOOLS[tc["name"]].search(text)]
+    mcp_writes = mcp_tools.guarded_tool_names()
+
+    def unrequested(name: str) -> bool:
+        if name in _GUARDED_TOOLS:
+            return not _GUARDED_TOOLS[name].search(text)
+        if name in mcp_writes:  # an external tool that changes something: any explicit action verb will do
+            return not any(p.search(text) for p in (_EXPLICIT_WRITE_RE, _EXPLICIT_MESSAGE_RE, _EXPLICIT_CALENDAR_RE))
+        return False
+
+    blocked = [tc for tc in last.tool_calls if unrequested(tc["name"])]
     if not blocked:
         return [], state
     logger.warning("blocked unrequested actions: %s", [tc["name"] for tc in blocked])

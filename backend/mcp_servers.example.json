@@ -1,10 +1,13 @@
 {
-  "_comment": "Copy this file to mcp_servers.json (same folder) and fill in real servers to give the agent MCP tools. Left absent/empty, the agent runs with only its local tools + memory search, exactly as before. Keys are server names, values follow langchain-mcp-adapters' MultiServerMCPClient config shape.",
+  "_comment": "Copy to mcp_servers.json (same folder, git-ignored) to give the agent tools from external MCP servers. Keys starting with '_' are ignored; \"enabled\": false switches a server off; ${VAR} is read from the environment (backend/.env), so keep tokens there. Shape: langchain-mcp-adapters MultiServerMCPClient. Tools that change something (send/create/delete/...) run only when the user's own message asks for an action.",
   "example-http-server": {
+    "enabled": false,
     "transport": "streamable_http",
-    "url": "http://localhost:8931/mcp"
+    "url": "https://mcp.example.com/mcp",
+    "headers": {"Authorization": "Bearer ${EXAMPLE_MCP_TOKEN}"}
   },
   "example-stdio-server": {
+    "enabled": false,
     "transport": "stdio",
     "command": "npx",
     "args": ["-y", "@some-org/some-mcp-server"]

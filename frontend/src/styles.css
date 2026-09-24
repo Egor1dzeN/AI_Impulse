@@ -216,6 +216,13 @@ body.is-chat .mark{ padding-left:52px }
 }
 body.is-chat .stage::before{ opacity:0 }
 
+/* Стартовый экран: сфера прокручивается вместе с заставкой, а не висит поверх
+   карточек «Ассистент заметил». Во время прокрутки — без анимации перехода. */
+body:not(.is-chat) .stage{
+  transform:translateX(-50%) translateY(calc(-1 * var(--hero-scroll, 0px)));
+}
+body.is-hero-scrolling .stage{ transition:none }
+
 body.is-chat .stage{
   top:20px;
   left:22px;

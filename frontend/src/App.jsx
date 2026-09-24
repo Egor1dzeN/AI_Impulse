@@ -134,6 +134,33 @@ export default function App() {
     if (!isChat) lift();
   }, [input, isChat]);
 
+  // On the start screen the orb is part of the page: when the hero (with the
+  // "Ассистент заметил" cards) is taller than the window, scrolling moves the
+  // orb up together with it instead of leaving it fixed on top of the cards.
+  useEffect(() => {
+    const main = mainRef.current;
+    const root = document.documentElement;
+    if (!main || isChat) {
+      root.style.setProperty('--hero-scroll', '0px');
+      return undefined;
+    }
+    let idle;
+    function onScroll() {
+      root.style.setProperty('--hero-scroll', `${main.scrollTop}px`);
+      document.body.classList.add('is-hero-scrolling');
+      clearTimeout(idle);
+      idle = setTimeout(() => document.body.classList.remove('is-hero-scrolling'), 150);
+    }
+    onScroll();
+    main.addEventListener('scroll', onScroll, { passive: true });
+    return () => {
+      main.removeEventListener('scroll', onScroll);
+      clearTimeout(idle);
+      document.body.classList.remove('is-hero-scrolling');
+      root.style.setProperty('--hero-scroll', '0px');
+    };
+  }, [isChat]);
+
   function lift() {
     const main = mainRef.current;
     const hero = heroRef.current;

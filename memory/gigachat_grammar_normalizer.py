@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 import os
 
 from gigachat.models import Chat, Messages, MessagesRole
@@ -34,7 +36,15 @@ class GigaChatGrammarNormalizer:
             messages=[Messages(role=MessagesRole.USER, content=prompt)],
             temperature=0.1,
         )
-        resp = self.client.chat(chat)
+        for attempt in range(7):
+            try:
+                resp = self.client.chat(chat)
+                break
+            except Exception as exc:  # noqa: BLE001 — 429/5xx/network: wait and resend, else keep the text as is
+                if attempt == 6 or type(exc).__name__ not in ("RateLimitError", "ServerError", "ReadTimeout", "ConnectError",
+                                                              "RemoteProtocolError", "ReadError"):
+                    return text
+                time.sleep(min(2.0 ** (attempt + 1), 30.0))
         result = resp.choices[0].message.content or ""
 
         return MemoryGrammarNormalizer._clean_result(result, text.strip())

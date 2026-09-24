@@ -405,7 +405,13 @@ def schedule_analysis(
     for d in days:
         d.pop("_occurrences", None)
     ranking = sorted(days, key=lambda d: (-d["scheduled_minutes"], d["date"]))
+    first_window = (
+        {"date": with_windows[0]["date"], "weekday": with_windows[0]["weekday"], **with_windows[0]["free_windows"][0]}
+        if with_windows else None
+    )
     return {
+        # First on purpose: "найди N минут" is answered by this field alone.
+        "ANSWER_first_suitable_window": first_window,
         "period": _period_payload(start, end),
         "timezone": str(tz),
         "working_hours": f"{work_start:%H:%M}–{work_end:%H:%M}",

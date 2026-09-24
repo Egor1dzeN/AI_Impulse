@@ -5,6 +5,8 @@ import os
 import re
 import time
 
+import httpx
+from gigachat.exceptions import RateLimitError, ServerError
 from gigachat.models import Chat, Messages, MessagesRole
 
 from gigachat_client import get_client
@@ -14,6 +16,8 @@ from gigachat_client import get_client
 # unused (250M free tokens) on this account, unlike GigaChat's embeddings
 # endpoint which needs separate paid access.
 GIGACHAT_LITE_MODEL = os.environ.get("GIGACHAT_LITE_MODEL", "GigaChat-2")
+
+_RETRIES = 6
 
 _FENCE_RE = re.compile(r"^```(?:json)?\s*\n?|\n?```$")
 
@@ -84,7 +88,18 @@ class GigaChatTextModel:
             temperature=temperature if do_sample else 0.1,
             top_p=top_p if do_sample else None,
         )
-        resp = self.client.chat(chat)
+        # A 429/5xx during a dataset import used to drop a whole profile area
+        # (e.g. where the user lives) or a record's facts: wait and resend.
+        for attempt in range(_RETRIES + 1):
+            try:
+                resp = self.client.chat(chat)
+                break
+            except (RateLimitError, ServerError, httpx.TransportError) as exc:
+                if attempt == _RETRIES:
+                    raise
+                delay = float(getattr(exc, "retry_after", 0) or 0) or min(2.0 ** (attempt + 1), 30.0)
+                print(f"[GIGACHAT] {type(exc).__name__}, retry {attempt + 1}/{_RETRIES} in {delay:.0f}s")
+                time.sleep(delay)
         response = _repair_json_array((resp.choices[0].message.content or "").strip())
 
         elapsed = time.perf_counter() - start

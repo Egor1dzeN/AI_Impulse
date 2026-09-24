@@ -141,9 +141,9 @@
  },
  "avg_net_salary_only": 128450,
  "spike": {
-  "category": "Кафе и рестораны",
-  "aug": 12930,
-  "jul": 6610
+  "category": "Кафе и рестораны + Кофейни",
+  "aug": 14640,
+  "jul": 8720
  },
  "avg_category": {
   "category": "Подписки",

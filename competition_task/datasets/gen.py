@@ -549,7 +549,12 @@ class Gen:
         self.truth["avg_net_salary_only"] = round(sum(nets) / 4)
         spike = self.p["spike_category_hint"]
         cat = next((c for c in months["2026-08"]["cats"] if re.search(spike, c, re.I)), None)
-        self.truth["spike"] = {"category": cat, "aug": months["2026-08"]["cats"].get(cat, 0), "jul": months["2026-07"]["cats"].get(cat, 0)}
+        # "Кафе и рестораны" in the organisers' reference includes coffee shops.
+        group = [c for c in set(months["2026-08"]["cats"]) | set(months["2026-07"]["cats"])
+                 if re.search(r"кафе|ресторан|кофе", c, re.I)] if re.search(r"кафе|ресторан", spike, re.I) else [cat]
+        self.truth["spike"] = {"category": " + ".join(sorted(group)),
+                               "aug": sum(months["2026-08"]["cats"].get(c, 0) for c in group),
+                               "jul": sum(months["2026-07"]["cats"].get(c, 0) for c in group)}
         avg_cat = self.p["avg_category_hint"]
         cat2 = next((c for c in months["2026-05"]["cats"] if re.search(avg_cat, c, re.I)), None)
         self.truth["avg_category"] = {"category": cat2, "avg": round(sum(months[m]["cats"].get(cat2, 0) for m in full) / 4)}

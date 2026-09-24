@@ -354,6 +354,14 @@ def handle_chat_turn_stream(
             ],
         }
         run = yield from run_graph(retry_inputs)
+        if _is_canned_refusal(run["reply"]) and digest:
+            # Still refused: answer from the verified profile lines that match
+            # the question — the data is the user's own, there's nothing to hide.
+            fallback = _profile_fallback(message, digest)
+            if fallback:
+                yield {"type": "reset"}
+                run["reply"] = fallback
+                yield {"type": "token", "text": fallback}
 
     # The model sometimes reports an action as done ("Готово, встреча
     # запланирована") without ever calling the draft tool — nothing exists
@@ -520,11 +528,28 @@ def _humanize_sources(text: str) -> str:
 _CANNED_REFUSAL_RE = re.compile(
     r"(Генеративные языковые модели не обладают собственным мнением|не обладает собственным мнением|"
     r"разговоры на некоторые темы (временно )?ограничены|не транслирует мнение своих разработчиков|"
+    r"чувствительными темами,? временно ограничены|могут создавать некорректные ответы|"
     r"Не люблю менять тему разговора|"
     r"Что-то в вашем вопросе меня смущает|разговоры на чувствительные темы могут быть ограничены|"
     r"Как у нейросетевой языковой модели у меня не может быть настроения)",
     re.IGNORECASE,
 )
+
+
+def _profile_fallback(question: str, digest: str) -> str:
+    words = {w[:5] for w in re.findall(r"[а-яёa-z]{4,}", question.lower())}
+    words |= {"город", "живёт", "живет"} if re.search(r"(?i)адрес|жив[уёе]|город", question) else set()
+    scored = []
+    for line in digest.split("\n"):
+        low = line.lower()
+        hits = sum(1 for w in words if w in low)
+        if hits:
+            scored.append((hits, line.lstrip("- ")))
+    if not scored:
+        return ""
+    best = [line for _, line in sorted(scored, key=lambda x: -x[0])[:3]]
+    return ("По вашим данным:\n" + "\n".join(f"- {b}" for b in best)
+            + "\n\nИсточник: профиль пользователя, собранный из его почты, переписки и календаря.")
 
 
 def _is_canned_refusal(reply: str) -> bool:

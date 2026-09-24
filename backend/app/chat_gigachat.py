@@ -208,12 +208,12 @@ _NETWORK_RETRIES = 2
 # 429 Too Many Requests (e.g. while a dataset import is extracting facts in
 # the background) or a transient 5xx such as 504 Gateway Time-out: wait and
 # resend, same "only before the first piece" rule.
-_RATE_LIMIT_RETRIES = 4
+_RATE_LIMIT_RETRIES = 7
 
 
 def _rate_limit_delay(exc: RateLimitError, retry: int) -> float:
     retry_after = getattr(exc, "retry_after", 0) or 0
-    return float(retry_after) if retry_after > 0 else min(2.0 ** (retry + 1), 20.0)
+    return float(retry_after) if retry_after > 0 else min(2.0 ** (retry + 1), 30.0)
 
 
 class ChatGigaChat(BaseChatModel):

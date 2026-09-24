@@ -504,9 +504,15 @@ def recurring_schedule(user_id: str) -> dict[str, Any]:
         key = o["series_id"] or f"{o['summary'].lower()}|{o['start']:%H:%M}"
         groups[key].append(o)
 
+    with db.get_conn() as conn:
+        rules = {r["sid"]: r["rule"] for r in conn.execute(
+            "SELECT COALESCE(series_id, id) AS sid, recurrence_json AS rule FROM raw_calendar_events "
+            "WHERE user_id = ? AND recurrence_json IS NOT NULL", (user_id,)).fetchall()}
     calendar_series = []
-    for items in groups.values():
-        if len(items) < 3:
+    for key, items in groups.items():
+        rule = rules.get(key) or ""
+        # A biweekly series may show only twice in a short export — its RRULE says it repeats.
+        if len(items) < 3 and not (rule and len(items) >= 2):
             continue
         weekdays = sorted({o["start"].weekday() for o in items})
         times = Counter(f"{o['start']:%H:%M}–{o['end']:%H:%M}" for o in items)
@@ -522,6 +528,9 @@ def recurring_schedule(user_id: str) -> dict[str, Any]:
             gaps += [(b - a).days for a, b in zip(days, days[1:])]
         gaps.sort()
         interval_weeks = max(1, round(gaps[len(gaps) // 2] / 7)) if gaps else 1
+        declared = re.search(r"INTERVAL=(\d+)", rule)
+        if declared and "WEEKLY" in rule:
+            interval_weeks = int(declared.group(1))
         if len(weekdays) == 5 and weekdays == [0, 1, 2, 3, 4] and interval_weeks == 1:
             frequency = "каждый будний день"
         elif interval_weeks == 1:

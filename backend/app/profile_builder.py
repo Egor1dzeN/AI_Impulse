@@ -70,7 +70,8 @@ DIMENSIONS: list[dict[str, Any]] = [
         "title": "вкусы, привычки и интересы",
         "checklist": ["еда и напитки: что любит / не любит", "любимые места", "хобби и интересы",
                       "как отдыхает, отпуск, путешествия"],
-        "pattern": r"люблю|обожаю|нравит|не люблю|ненавиж|терпеть не|предпочита|любим|аллерг|не ем|вегетар|кофе|\bчай|"
+        "pattern": r"люблю|обожаю|нравит|не люблю|ненавиж|терпеть не|предпочита|любим|аллерг|не ем|не пью|вегетар|веган|глютен|"
+                   r"лактоз|непереносим|без сахара|халял|кошер|увлека|затягивает|хожу в|занимаюсь|мастер-класс|студи|кофе|\bчай|"
                    r"вкусн|ресторан|кафе|кино|сериал|книг|музык|хобби|путешеств|отпуск|отдых|выходн|мечта",
     },
     {
@@ -329,7 +330,11 @@ def _address_forms(user_id: str, own_name: str | None) -> dict[str, Counter[str]
     or end ("С ДР, Машуль!") of their messages and emails, per chat/sender."""
     if not own_name:
         return {}
-    first_letter = own_name.strip()[0].lower()
+    first = own_name.strip().split()[0].lower().replace("ё", "е")
+    first_letter = first[0]
+    # "Тёма"/"Тёмыч" for Артём, "Саня" for Александр: a pet name may start
+    # with another letter but shares three letters of the name in a row.
+    trigrams = {first[i:i + 3] for i in range(len(first) - 2)}
     with db.get_conn() as conn:
         messages = conn.execute(
             "SELECT chat, sender, text FROM raw_messages WHERE user_id = ? AND is_out = 0 AND text != ''", (user_id,)
@@ -347,7 +352,10 @@ def _address_forms(user_id: str, own_name: str | None) -> dict[str, Counter[str]
             return
         word = next(g for g in match.groups() if g)
         low = word.lower()
-        if low in _INTERJECTIONS or low in senders or not low.startswith(first_letter):
+        folded = low.replace("ё", "е")
+        if low in _INTERJECTIONS or low in senders:
+            return
+        if not folded.startswith(first_letter) and not any(t in folded for t in trigrams):
             return
         forms[where][word.capitalize()] += 1
 

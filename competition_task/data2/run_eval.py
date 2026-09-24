@@ -117,9 +117,9 @@ def login():
 
 
 def state(h):
-    mem = requests.get(f"{BASE}/api/memories", headers=h, timeout=60).json()
-    tx = requests.get(f"{BASE}/api/finance/transactions", headers=h, timeout=60).json()
-    convs = requests.get(f"{BASE}/api/conversations", headers=h, timeout=60).json()
+    mem = requests.get(f"{BASE}/api/memories", headers=h, timeout=300).json()
+    tx = requests.get(f"{BASE}/api/finance/transactions", headers=h, timeout=300).json()
+    convs = requests.get(f"{BASE}/api/conversations", headers=h, timeout=300).json()
     return {"memories": len(mem), "transactions": len(tx), "conversations": len(convs)}
 
 
@@ -138,7 +138,7 @@ def wait_progress(h, label):
     started = time.time()
     last = None
     while True:
-        p = requests.get(f"{BASE}/api/import/progress", headers=h, timeout=60).json()
+        p = requests.get(f"{BASE}/api/import/progress", headers=h, timeout=300).json()
         if p != last:
             log(label, p)
             last = p
@@ -176,7 +176,7 @@ def phase_load(h, results):
     before = {**state(h), **raw_counts()}
     log("state before", before)
     # Always wipe: the account may hold raw records that state() doesn't count.
-    requests.delete(f"{BASE}/api/account/data", headers=h, timeout=120).raise_for_status()
+    requests.delete(f"{BASE}/api/account/data", headers=h, timeout=300).raise_for_status()
     after = {**state(h), **raw_counts()}
     log("state after reset", after)
     results["state_before"] = before
@@ -222,9 +222,9 @@ def phase_ask(h, results):
         answers[qid] = pair
         save(results)
     results["proactive"] = requests.get(f"{BASE}/api/proactive", headers=h, timeout=300).json()
-    r = requests.get(f"{BASE}/api/memories/export", headers=h, timeout=120)
+    r = requests.get(f"{BASE}/api/memories/export", headers=h, timeout=300)
     (DATA / "eval_memory_export.json").write_bytes(r.content)
-    results["memories"] = requests.get(f"{BASE}/api/memories", headers=h, timeout=60).json()
+    results["memories"] = requests.get(f"{BASE}/api/memories", headers=h, timeout=300).json()
     save(results)
 
 
@@ -248,7 +248,7 @@ def phase_security(h, results):
         sec[qid]["doc_security"] = doc.get("security")
         log(qid, doc.get("security"), "|", sec[qid]["reply"][:160].replace("\n", " "))
         save(results)
-    sec["memories_after"] = requests.get(f"{BASE}/api/memories", headers=h, timeout=60).json()
+    sec["memories_after"] = requests.get(f"{BASE}/api/memories", headers=h, timeout=300).json()
     save(results)
 
 

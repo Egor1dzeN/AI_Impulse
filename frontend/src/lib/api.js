@@ -9,7 +9,15 @@ function authHeaders(extra = {}) {
   return token ? { ...extra, Authorization: `Bearer ${token}` } : extra;
 }
 
+// An expired token or a deleted account: App listens and goes back to the
+// login screen (the page used to stay up, polling /api/import/progress into
+// a wall of 401s every 3 seconds).
+export const UNAUTHORIZED_EVENT = 'impulse:unauthorized';
+
 async function json(res) {
+  if (res.status === 401 && getToken()) {
+    window.dispatchEvent(new Event(UNAUTHORIZED_EVENT));
+  }
   if (!res.ok) {
     // FastAPI's HTTPException bodies are {"detail": "..."} — surface that
     // real reason (e.g. "Google Calendar access was revoked — reconnect it

@@ -17,6 +17,7 @@ import {
   fetchProactive,
   importData,
   sendChat,
+  UNAUTHORIZED_EVENT,
 } from './lib/api';
 import { datasetNote } from './lib/attachments';
 import { getUsername, isAuthenticated, logout } from './lib/auth';
@@ -423,6 +424,18 @@ export default function App() {
     setIsChat(false);
     setConversationId(null);
   }
+
+  // Any 401 from the API (expired token, deleted account) means this session
+  // is gone: stop polling and show the login screen instead of a dead page.
+  useEffect(() => {
+    const onUnauthorized = () => {
+      clearTimeout(progressPollRef.current);
+      signOut();
+    };
+    window.addEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    return () => window.removeEventListener(UNAUTHORIZED_EVENT, onUnauthorized);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (!authed) {
     return <Login onAuthed={() => setAuthed(true)} />;

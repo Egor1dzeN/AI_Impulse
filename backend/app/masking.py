@@ -67,6 +67,8 @@ _KNOWN_TOKEN_RES = [
     re.compile(r"\bgh[pousr]_[A-Za-z0-9]{20,}\b"),
     re.compile(r"\bxox[abpr]-[A-Za-z0-9\-]{10,}\b"),
     re.compile(r"\bAKIA[0-9A-Z]{16}\b"),
+    # Telegram bot token (also inside api.telegram.org/bot<token>/... URLs in tracebacks).
+    re.compile(r"(?<!\d)\d{8,10}:[A-Za-z0-9_\-]{35}\b"),
     re.compile(r"\bAIza[0-9A-Za-z_\-]{30,}\b"),
     re.compile(r"\bya29\.[0-9A-Za-z_\-]{20,}\b"),
     re.compile(r"\beyJ[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\.[A-Za-z0-9_\-]{8,}\b"),

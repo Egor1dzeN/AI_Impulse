@@ -11,7 +11,11 @@ from typing import Any
 
 import requests
 
-TELEGRAM_API = "https://api.telegram.org"
+# Where the host can't reach Telegram directly (some Russian clouds block it),
+# requests go through TELEGRAM_PROXY (socks5://… or http://…) and/or a relay
+# that mirrors the Bot API (TELEGRAM_API_BASE, e.g. a Cloudflare Worker).
+TELEGRAM_API = os.environ.get("TELEGRAM_API_BASE", "").strip().rstrip("/") or "https://api.telegram.org"
+TELEGRAM_PROXY = os.environ.get("TELEGRAM_PROXY", "").strip()
 
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 
@@ -78,11 +82,16 @@ class TelegramBotClient:
         method: str,
         payload: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        response = requests.post(
-            f"{self.base_url}/{method}",
-            json=payload or {},
-            timeout=self.config.timeout,
-        )
+        try:
+            response = requests.post(
+                f"{self.base_url}/{method}",
+                json=payload or {},
+                timeout=self.config.timeout,
+                proxies={"http": TELEGRAM_PROXY, "https": TELEGRAM_PROXY} if TELEGRAM_PROXY else None,
+            )
+        except requests.RequestException as exc:
+            # The exception text contains the full URL — with the bot token in it.
+            raise TelegramBotError(f"Telegram API недоступен ({type(exc).__name__}): проверьте сеть или TELEGRAM_PROXY") from None
 
         try:
             data = response.json()
@@ -391,6 +400,29 @@ class TelegramBotClient:
                     sender.get("first_name"),
                     sender.get("last_name"),
                     datetime.now(timezone.utc).isoformat(),
+                ),
+            )
+            # The private chat with the bot has the user's own id as chat_id.
+            # Without this row every read/send to it failed _assert_chat_access
+            # and ordinary private messages raised instead of being handled.
+            conn.execute(
+                """
+                INSERT INTO telegram_chat_access (
+                    chat_id, app_user_id, chat_type, title, username,
+                    connected_at, connected_by_telegram_user_id
+                )
+                VALUES (?, ?, 'private', ?, ?, ?, ?)
+                ON CONFLICT(chat_id, app_user_id) DO UPDATE SET
+                    title = excluded.title,
+                    username = excluded.username
+                """,
+                (
+                    telegram_user_id,
+                    app_user_id,
+                    " ".join(p for p in (sender.get("first_name"), sender.get("last_name")) if p) or None,
+                    sender.get("username"),
+                    datetime.now(timezone.utc).isoformat(),
+                    telegram_user_id,
                 ),
             )
             conn.commit()
@@ -853,9 +885,30 @@ class TelegramBotClient:
     # POLLING
     # ============================================================
 
+    def disconnect(self, app_user_id: str) -> None:
+        """Forget the Telegram account and every chat bound to this app user."""
+        with self._connect_db() as conn:
+            conn.execute("DELETE FROM telegram_chat_access WHERE app_user_id = ?", (str(app_user_id),))
+            conn.execute("DELETE FROM telegram_connections WHERE app_user_id = ?", (str(app_user_id),))
+            conn.commit()
+
+    def send_raw(self, chat_id: int, text: str) -> None:
+        """Bot's own service replies (connection confirmations, answers in the
+        user's private chat) — not an action on the user's behalf, so no
+        app-user access check; callers pass the chat the update came from."""
+        for start in range(0, len(text), 4000):
+            self._request("sendMessage", {"chat_id": int(chat_id), "text": text[start:start + 4000]})
+
+    def send_typing(self, chat_id: int) -> None:
+        try:
+            self._request("sendChatAction", {"chat_id": int(chat_id), "action": "typing"})
+        except TelegramBotError:
+            pass
+
     def poll_once(self, timeout: int = 0) -> dict[str, Any]:
         """Receive and process pending message updates once."""
-        timeout = max(0, min(int(timeout), 30))
+        # Long polling must finish before the HTTP timeout of _request.
+        timeout = max(0, min(int(timeout), self.config.timeout - 5))
 
         data = self._request(
             "getUpdates",
@@ -882,6 +935,8 @@ class TelegramBotClient:
                 errors.append(
                     {
                         "update_id": update.get("update_id"),
+                        "chat_id": (message.get("chat") or {}).get("id"),
+                        "chat_type": (message.get("chat") or {}).get("type"),
                         "error": str(exc),
                     }
                 )

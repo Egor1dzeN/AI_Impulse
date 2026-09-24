@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { md } from '../lib/markdown';
 import { getLanguage, translate, useI18n } from '../lib/i18n.jsx';
-import { confirmCalendarAction, sendEmail } from '../lib/api';
+import { confirmCalendarAction, sendEmail, sendTelegramMessage } from '../lib/api';
 import MapboxMap from './MapboxMap';
 import MemoryProgress from './MemoryProgress';
 import { splitAttachments } from '../lib/attachments';
@@ -50,6 +50,7 @@ function ActionBadge({ action }) {
     'build_route',
     'get_workout_route',
     'draft_email',
+    'draft_telegram_message',
     'create_calendar_event',
     'update_calendar_event',
     'delete_calendar_event',
@@ -232,6 +233,54 @@ function EmailDraftEmbed({ action }) {
         </button>
       )}
       {status === 'error' && <p className="settings-panel__hint settings-panel__hint--error">{t('chat.emailDraftError')}</p>}
+    </div>
+  );
+}
+
+// Same rule as EmailDraftEmbed: the only place a Telegram message actually
+// goes out is this button (main.py's POST /api/telegram/send).
+function TelegramDraftEmbed({ action }) {
+  const { t } = useI18n();
+  const draft = action?.tool === 'draft_telegram_message' && !action.result?.error ? action.result : null;
+  const [status, setStatus] = useState('idle'); // idle | sending | sent | error
+  const [text, setText] = useState(draft?.text || '');
+  const [errorText, setErrorText] = useState('');
+  if (!draft) return null;
+  const locked = status === 'sending' || status === 'sent';
+
+  const onSend = async () => {
+    setStatus('sending');
+    try {
+      await sendTelegramMessage({ draftId: draft.draft_id, chatId: draft.chat_id, text });
+      setStatus('sent');
+    } catch (err) {
+      setErrorText(err.message || '');
+      setStatus('error');
+    }
+  };
+
+  return (
+    <div className="email-draft">
+      <div className="email-draft__title">{t('chat.telegramDraftTitle', { chat: draft.chat_title })}</div>
+      <textarea
+        className="email-draft__body"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        disabled={locked}
+        rows={Math.min(10, Math.max(3, text.split('\n').length))}
+      />
+      {status === 'sent' ? (
+        <div className="email-draft__sent">{t('chat.telegramDraftSent')}</div>
+      ) : (
+        <button type="button" className="ghost" onClick={onSend} disabled={status === 'sending' || !text.trim()}>
+          {status === 'sending' ? t('chat.emailDraftSending') : t('chat.telegramDraftSend')}
+        </button>
+      )}
+      {status === 'error' && (
+        <p className="settings-panel__hint settings-panel__hint--error">
+          {t('chat.telegramDraftError')}{errorText ? `: ${errorText}` : ''}
+        </p>
+      )}
     </div>
   );
 }
@@ -632,6 +681,7 @@ export default function Chat({ messages, memoryProgress, scrollSignal, smoothScr
               {m.status === 'done' && <RouteEmbed action={m.action} />}
               {m.status === 'done' && <WorkoutRouteEmbed action={m.action} />}
               {m.status === 'done' && <EmailDraftEmbed action={m.action} />}
+              {m.status === 'done' && <TelegramDraftEmbed action={m.action} />}
               {m.status === 'done' && <CalendarActionEmbed action={m.action} />}
               {m.status === 'done' && <ActionBadge action={m.action} />}
               {m.status === 'done' && <Copy text={m.content} />}

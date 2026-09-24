@@ -10,6 +10,7 @@ import {
 } from '../lib/api';
 import { applyTheme, getTheme, setTheme as persistTheme } from '../lib/settings';
 import { useI18n } from '../lib/i18n.jsx';
+import TelegramSettings from './TelegramSettings';
 
 export default function SettingsPanel({ open, onClose }) {
   const { t, lang, changeLanguage } = useI18n();
@@ -340,6 +341,10 @@ export default function SettingsPanel({ open, onClose }) {
               {gmailError && <p className="settings-panel__hint settings-panel__hint--error">{gmailError}</p>}
             </>
           )}
+        </section>
+
+        <section>
+          <TelegramSettings open={open} />
         </section>
 
         <section className="settings-panel__danger-zone">

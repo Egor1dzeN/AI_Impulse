@@ -32,7 +32,7 @@ from fastapi import BackgroundTasks, Depends, FastAPI, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import RedirectResponse, Response, StreamingResponse
 
-from . import agent, auth, conversations, db, documents, gmail, google_calendar, mcp_tools, memory_bridge, personal_data, proactive, profile_builder, tools, transcription, user_settings
+from . import agent, auth, conversations, db, documents, gmail, google_calendar, mcp_tools, memory_bridge, personal_data, proactive, profile_builder, telegram_bridge, tools, transcription, user_settings
 from .schemas import (
     AddMemoryRequest,
     CalendarActionRequest,
@@ -47,6 +47,8 @@ from .schemas import (
     RegisterRequest,
     SandboxOut,
     SendEmailRequest,
+    TelegramConnectCodeRequest,
+    TelegramSendRequest,
     SettingsOut,
     TokenOut,
     TransactionOut,
@@ -72,6 +74,60 @@ async def on_startup() -> None:
     db.init_db()
     install_log_masking()
     await mcp_tools.refresh_mcp_tools()
+    telegram_bridge.start_polling()
+
+
+@app.get("/api/telegram/status")
+def telegram_status(user_id: str = Depends(auth.get_current_user_id)) -> dict:
+    return telegram_bridge.status(user_id)
+
+
+@app.post("/api/telegram/connect-code")
+def telegram_connect_code(req: TelegramConnectCodeRequest, user_id: str = Depends(auth.get_current_user_id)) -> dict:
+    client = telegram_bridge.get_client()
+    if not client:
+        raise HTTPException(status_code=503, detail="Telegram bot is not configured on this server")
+    if req.kind not in ("private", "group"):
+        raise HTTPException(status_code=400, detail="kind must be private or group")
+    if req.kind == "group" and not telegram_bridge.is_connected(user_id):
+        raise HTTPException(status_code=400, detail="connect your own Telegram first")
+    code = client.create_connect_code(user_id, req.kind, ttl_seconds=900)
+    bot = telegram_bridge.bot_username()
+    return {
+        **code,
+        "bot_username": bot,
+        "deep_link": f"https://t.me/{bot}?start={code['code']}" if req.kind == "private" and bot else None,
+        "group_command": f"/connect {code['code']}" if req.kind == "group" else None,
+        "receiving": telegram_bridge.polling_enabled(),
+    }
+
+
+@app.post("/api/telegram/disconnect")
+def telegram_disconnect(user_id: str = Depends(auth.get_current_user_id)) -> dict:
+    client = telegram_bridge.get_client()
+    if client:
+        client.disconnect(user_id)
+    return telegram_bridge.status(user_id)
+
+
+@app.post("/api/telegram/send")
+def telegram_send(req: TelegramSendRequest, user_id: str = Depends(auth.get_current_user_id)) -> dict:
+    """The ONLY path that sends a message on the user's request — reachable
+    from the confirmation button of a draft_telegram_message card, never from
+    the agent loop. A repeated click (page reload) is a no-op, not a duplicate."""
+    client = telegram_bridge.get_client()
+    if not client:
+        raise HTTPException(status_code=503, detail="Telegram bot is not configured on this server")
+    if telegram_bridge.draft_already_sent(req.draft_id):
+        return {"already_sent": True}
+    try:
+        result = client.send_message(user_id, req.chat_id, req.text)
+    except telegram_bridge.TelegramAuthorizationError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
+    except (telegram_bridge.TelegramBotError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    telegram_bridge.mark_draft_sent(req.draft_id, user_id)
+    return {"already_sent": False, **result}
 
 
 @app.get("/api/health")

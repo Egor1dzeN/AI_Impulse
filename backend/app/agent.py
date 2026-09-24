@@ -32,7 +32,7 @@ MAX_ATTEMPTS = 2
 # Tools that write something (or prepare a confirm card for it). A turn that
 # claims an action happened must have called one of these.
 ACTION_TOOL_NAMES = {
-    "create_calendar_event", "update_calendar_event", "delete_calendar_event", "draft_email",
+    "create_calendar_event", "update_calendar_event", "delete_calendar_event", "draft_email", "draft_telegram_message",
     "create_task", "add_expense", "add_income", "update_transaction", "log_meal", "log_weight", "log_workout",
 }
 
@@ -572,6 +572,7 @@ _SOURCE_LABELS = {
     "data_overview": "загруженные данные", "get_weather": "прогноз погоды", "build_route": "маршрут на карте",
     "get_exchange_rate": "курсы ЦБ РФ", "get_exchange_rate_history": "курсы ЦБ РФ", "web_search": "поиск в интернете",
     "get_calendar_events": "календарь", "recurring_payments": "банковские уведомления и письма о списаниях",
+    "telegram_chats": "подключённые Telegram-чаты", "telegram_messages": "сообщения в Telegram",
 }
 
 

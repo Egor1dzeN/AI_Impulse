@@ -6,7 +6,7 @@
   questions.json (id, формулировка 1, формулировка 2), security.json, rules.json (правила проверки),
   reference_answers.md (эталон), truth.json (истина генератора).
 
-Формат записей — как в competition_task/data (Gmail-подобные письма, события Google Calendar c
+Формат записей — как в competition_task/train_dataset (Gmail-подобные письма, события Google Calendar c
 развёрнутыми повторами, сообщения Telegram). Точка отсчёта — ASSISTANT_NOW из backend/.env
 (по умолчанию четверг 17.09.2026 12:30 в часовом поясе персоны). Всё детерминировано (seed в персоне).
 Эталонные числа считаются из тех же данных, что попадают в файлы, и сверяются с bank_parser.

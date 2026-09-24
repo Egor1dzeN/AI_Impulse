@@ -45,7 +45,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 from app import agent, db, memory_bridge  # noqa: E402
 
 USER_ID = "competition_test_maria"
-EMAILS_PATH = ROOT / "competition_task" / "data" / "emails_mock_teamlead.jsonl"
+EMAILS_PATH = ROOT / "competition_task" / "train_dataset" / "emails_mock_teamlead.jsonl"
 
 # (question, reference answer summary) — from data/reference_answers.md,
 # restricted to what emails_mock_teamlead.jsonl alone should support.

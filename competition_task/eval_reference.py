@@ -198,7 +198,7 @@ def ask(question: str) -> tuple[str, list[str]]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("questions", nargs="*", help="subset of question ids, e.g. q11 q14")
-    parser.add_argument("--data", default=str(ROOT / "competition_task" / "data"))
+    parser.add_argument("--data", default=str(ROOT / "competition_task" / "train_dataset"))
     parser.add_argument("--now", default="2026-09-17T12:30:00+03:00", help="dataset reference moment")
     parser.add_argument("--no-load", action="store_true")
     parser.add_argument("--with-memory", action="store_true", help="also run per-record fact extraction (slow)")

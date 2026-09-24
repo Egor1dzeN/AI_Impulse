@@ -68,12 +68,12 @@ Restore занимается разработкой Restore Cloud — облач
 
 Для интеграции со сторонними сервисами вам будет необходимо создать тестовый аккаунт самостоятельно.
 
-Моковые данные для разработки лежат в [`data/`](./data) — почта, Telegram и календарь одного синтетического пользователя, из которых агент должен сам собрать профиль. Как именно скормить их агенту (загрузка как источник, вставка в чат и т.д.) — на усмотрение команды.
+Моковые данные для разработки лежат в [`data/`](./train_dataset) — почта, Telegram и календарь одного синтетического пользователя, из которых агент должен сам собрать профиль. Как именно скормить их агенту (загрузка как источник, вставка в чат и т.д.) — на усмотрение команды.
 
-- [`data/emails_mock_teamlead.jsonl`](./data/emails_mock_teamlead.jsonl) — мок почты;
-- [`data/telegram_mock_teamlead.jsonl`](./data/telegram_mock_teamlead.jsonl) — мок переписки в Telegram;
-- [`data/google_calendar_mock.jsonl`](./data/google_calendar_mock.jsonl) — мок календаря Google;
-- [`data/reference_answers.md`](./data/reference_answers.md) — эталонные ответы для самопроверки.
+- [`data/emails_mock_teamlead.jsonl`](train_dataset/emails_mock_teamlead.jsonl) — мок почты;
+- [`data/telegram_mock_teamlead.jsonl`](train_dataset/telegram_mock_teamlead.jsonl) — мок переписки в Telegram;
+- [`data/google_calendar_mock.jsonl`](train_dataset/google_calendar_mock.jsonl) — мок календаря Google;
+- [`data/reference_answers.md`](train_dataset/reference_answers.md) — эталонные ответы для самопроверки.
 
 **Обязательный сценарий загрузки данных.** На старте команде выдаётся один набор данных — на нём решение разрабатывается и настраивается. Во время проверки жюри выдаёт второй, отличный от исходного набор данных, и на нём проходит вся оценка. Поэтому в решении обязательно должен быть быстрый и понятный способ для организаторов самостоятельно загрузить новый набор данных вместо стартового (например, через Web UI или конфиг источника — без правки кода и без помощи команды).
 

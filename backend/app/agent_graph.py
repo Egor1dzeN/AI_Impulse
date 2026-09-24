@@ -110,33 +110,52 @@ def _block_unrequested_writes(state: MessagesState, user_id: str | None = None) 
     return notes, {**state, "messages": [*state["messages"][:-1], trimmed]}
 
 
-MAX_MCP_CALLS_PER_TOOL = 6
+MAX_MCP_CALLS_PER_TOOL = 15
+MAX_MCP_PAGES_PER_QUERY = 4
+_PAGING_ARGS = {"page", "offset", "cursor", "start", "skip", "page_token", "pageToken"}
 _MCP_LIMIT_NOTE = (
     "НЕ ВЫПОЛНЕНО: этот внешний инструмент уже вызывался {n} раз в этом ответе. Больше не вызывай его — "
     "ответь пользователю по уже полученным данным и, если нужно, предложи уточнить запрос."
+)
+_MCP_PAGING_NOTE = (
+    "НЕ ВЫПОЛНЕНО: этот запрос уже пролистан на {n} страниц. Не листай дальше — ответь по найденному или "
+    "уточни запрос (другие слова, фильтр, сортировка)."
 )
 
 
 def _limit_external_calls(state: MessagesState) -> tuple[list[ToolMessage], MessagesState]:
     """A paged MCP catalog (a shop's discounts: 15 pages) had the model page
     through all of it looking for one category until the recursion limit
-    killed the turn. Cap calls per external tool within one user turn."""
+    killed the turn. Paging one query is capped at a few pages; distinct
+    queries (a 7-item shopping cart = 7 searches) get a much higher cap."""
     last = state["messages"][-1]
     if not isinstance(last, AIMessage) or not last.tool_calls:
         return [], state
+
+    def query_key(tc: dict) -> str:
+        args = {k: v for k, v in (tc.get("args") or {}).items() if k not in _PAGING_ARGS}
+        return tc["name"] + json.dumps(args, sort_keys=True, ensure_ascii=False)
+
     counts: dict[str, int] = {}
+    pages: dict[str, int] = {}
     for m in reversed(state["messages"][:-1]):
         if isinstance(m, HumanMessage):
             break
         if isinstance(m, AIMessage):
             for tc in m.tool_calls:
                 counts[tc["name"]] = counts.get(tc["name"], 0) + 1
-    over = [tc for tc in last.tool_calls
-            if tc["name"].startswith("mcp_") and counts.get(tc["name"], 0) >= MAX_MCP_CALLS_PER_TOOL]
-    if not over:
+                pages[query_key(tc)] = pages.get(query_key(tc), 0) + 1
+    notes: list[ToolMessage] = []
+    for tc in last.tool_calls:
+        if not tc["name"].startswith("mcp_"):
+            continue
+        if counts.get(tc["name"], 0) >= MAX_MCP_CALLS_PER_TOOL:
+            notes.append(ToolMessage(content=_MCP_LIMIT_NOTE.format(n=counts[tc["name"]]), tool_call_id=tc["id"], name=tc["name"]))
+        elif pages.get(query_key(tc), 0) >= MAX_MCP_PAGES_PER_QUERY:
+            notes.append(ToolMessage(content=_MCP_PAGING_NOTE.format(n=pages[query_key(tc)]), tool_call_id=tc["id"], name=tc["name"]))
+    if not notes:
         return [], state
-    notes = [ToolMessage(content=_MCP_LIMIT_NOTE.format(n=counts[tc["name"]]), tool_call_id=tc["id"], name=tc["name"])
-             for tc in over]
+    over = [tc for tc in last.tool_calls if tc["id"] in {n.tool_call_id for n in notes}]
     over_ids = {tc["id"] for tc in over}
     trimmed = last.model_copy(update={"tool_calls": [tc for tc in last.tool_calls if tc["id"] not in over_ids]})
     return notes, {**state, "messages": [*state["messages"][:-1], trimmed]}

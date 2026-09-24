@@ -1567,3 +1567,6 @@ body.is-chat .dock{ transform:none }
 .mcp-form input:focus{ border-color:var(--flare-line) }
 .mcp-form button{ align-self:flex-start }
 .mcp-url{ margin-top:0; word-break:break-all; opacity:.75 }
+
+/* Long bare URLs (autolinked product/cart links) wrap instead of overflowing on phones */
+.msg__body a{ overflow-wrap:anywhere }

@@ -83,17 +83,35 @@ function highlight(code, lang) {
   return { html: esc(code), lang: '' };
 }
 
+// Bare http(s) URLs in already-escaped HTML become links; existing anchors
+// and inline code are left alone. Trailing punctuation stays outside the link.
+function autolink(html) {
+  return html
+    .split(/(<a [^>]*>.*?<\/a>|<code>.*?<\/code>)/g)
+    .map((part, i) =>
+      i % 2
+        ? part
+        : part.replace(/https?:\/\/[^\s<]+/g, (raw) => {
+            const [, url, tail] = raw.match(/^(.*?)((?:[.,;:!?)»]|&quot;)*)$/);
+            return `<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>${tail}`;
+          })
+    )
+    .join('');
+}
+
 export function md(src, lang = 'ru') {
   const inline = (s) =>
-    esc(s)
-      .replace(/`([^`]+)`/g, '<code>$1</code>')
-      .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-      // [label](https://url) -> a real link. Restricted to http(s) so a
-      // model can't smuggle a javascript: URL into an anchor href.
-      .replace(
-        /\[([^\]]+)\]\((https?:\/\/[^\s")]+)\)/g,
-        '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
-      );
+    autolink(
+      esc(s)
+        .replace(/`([^`]+)`/g, '<code>$1</code>')
+        .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+        // [label](https://url) -> a real link. Restricted to http(s) so a
+        // model can't smuggle a javascript: URL into an anchor href.
+        .replace(
+          /\[([^\]]+)\]\((https?:\/\/[^\s")]+)\)/g,
+          '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>'
+        )
+    );
 
   const blocks = [];
   src = src.replace(/```([a-zA-Z0-9_+-]*)\n?([\s\S]*?)(?:```|$)/g, (m, rawLang, code) => {

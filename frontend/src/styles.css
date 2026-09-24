@@ -1450,6 +1450,12 @@ body.is-chat .dock{ transform:none }
 }
 .chat-list__item-remove svg{ width:12px; height:12px }
 .chat-list__item-remove:hover{ color:var(--flare-deep); background:var(--flare-tint) }
+/* The title and × are plain <button>s: without this the browser draws its own
+   dark frame and grey fill around the chat name. */
+.chat-list__item-title,
+.chat-list__item-remove{ border:0; background:transparent; margin:0; border-radius:0 }
+.chat-list__item-title:focus-visible,
+.chat-list__item-remove:focus-visible{ outline-offset:-2px; border-radius:10px }
 
 /* ── Настройки ───────────────────────────────────────────────────── */
 

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 import re
 
@@ -141,6 +142,43 @@ def _limit_external_calls(state: MessagesState) -> tuple[list[ToolMessage], Mess
     return notes, {**state, "messages": [*state["messages"][:-1], trimmed]}
 
 
+MAX_IDENTICAL_CALLS = 2
+_REPEAT_NOTE = (
+    "НЕ ВЫПОЛНЕНО: ровно этот вызов (та же функция, те же аргументы) уже делался в этом ответе — его результат "
+    "есть выше, повтор ничего нового не даст. Не повторяй его: ответь пользователю по уже полученным данным. "
+    "Если нужного действия нет среди твоих функций — прямо скажи, что сделать это не можешь, и почему."
+)
+
+
+def _limit_repeated_calls(state: MessagesState) -> tuple[list[ToolMessage], MessagesState]:
+    """With Gmail disconnected there is no send tool; asked to "отправь", the
+    model alternated search_memory / search_emails with the same queries 14
+    times until the recursion limit. A third identical call in one user turn
+    is never useful — refuse it and tell the model to answer."""
+    last = state["messages"][-1]
+    if not isinstance(last, AIMessage) or not last.tool_calls:
+        return [], state
+
+    def key(tc: dict) -> str:
+        return tc["name"] + json.dumps(tc.get("args") or {}, sort_keys=True, ensure_ascii=False)
+
+    seen: dict[str, int] = {}
+    for m in reversed(state["messages"][:-1]):
+        if isinstance(m, HumanMessage):
+            break
+        if isinstance(m, AIMessage):
+            for tc in m.tool_calls:
+                seen[key(tc)] = seen.get(key(tc), 0) + 1
+    repeats = [tc for tc in last.tool_calls if seen.get(key(tc), 0) >= MAX_IDENTICAL_CALLS]
+    if not repeats:
+        return [], state
+    logger.warning("blocked repeated tool calls: %s", [tc["name"] for tc in repeats])
+    notes = [ToolMessage(content=_REPEAT_NOTE, tool_call_id=tc["id"], name=tc["name"]) for tc in repeats]
+    repeat_ids = {tc["id"] for tc in repeats}
+    trimmed = last.model_copy(update={"tool_calls": [tc for tc in last.tool_calls if tc["id"] not in repeat_ids]})
+    return notes, {**state, "messages": [*state["messages"][:-1], trimmed]}
+
+
 def build_graph(user_id: str, enable_thinking: bool = True) -> CompiledStateGraph:
     all_tools = build_tool_list(user_id)
     llm_with_tools = _build_llm(enable_thinking).bind_tools(all_tools)
@@ -172,7 +210,8 @@ def build_graph(user_id: str, enable_thinking: bool = True) -> CompiledStateGrap
     def masked_tools_node(state: MessagesState, config) -> dict:
         blocked, state = _block_unrequested_writes(state, user_id)
         limited, state = _limit_external_calls(state)
-        blocked = [*blocked, *limited]
+        repeated, state = _limit_repeated_calls(state)
+        blocked = [*blocked, *limited, *repeated]
         result = tool_node.invoke(state, config) if state["messages"][-1].tool_calls else {"messages": []}
         result = {**result, "messages": [*blocked, *result.get("messages", [])]}
         for msg in result.get("messages", []):

@@ -78,6 +78,36 @@ def claims_unperformed_action(user_message: str, reply: str, action_tools: set[s
         and bool(_ACTION_CLAIM_RE.search(reply or ""))
     )
 
+EMAIL_SEND_UNAVAILABLE_NOTE = (
+    "⚠️ Gmail не подключён, поэтому отправить письмо я не могу — текст можно скопировать и отправить вручную. "
+    "Подключите Gmail в Настройках, и я покажу черновик с кнопкой «Отправить»."
+)
+EMAIL_SEND_UNAVAILABLE_REPLY = (
+    "Отправить письмо не могу: Gmail не подключён, поэтому ничего не отправлено. Черновик выше в диалоге — "
+    "его можно скопировать и отправить вручную. Подключите Gmail в Настройках, и я покажу черновик с кнопкой «Отправить»."
+)
+# Imperatives only: "отправил ли я письмо?" is a question about the past, not an order.
+_SEND_ORDER_RE = re.compile(
+    r"(?i)\b(отправь|отправьте|отправляй|отправляйте|отправить|отошли|отошлите|пошли|пошлите|перешли|перешлите|send)\b"
+)
+_EMAIL_WORD_RE = re.compile(r"(?i)\b(письм\w*|почт\w*|e-?mail\w*|имейл\w*|мейл\w*|черновик\w*|gmail)")
+_EMAIL_DRAFT_RE = re.compile(r"(?i)(тема\s*:|subject\s*:|черновик\w* письм)")
+
+
+def wants_email_sent(user_message: str, history: list[HumanMessage | AIMessage]) -> bool:
+    """The user asks to send an email: "отправь письмо Ольге", or a bare
+    "отправь" right after the assistant showed an email draft."""
+    text = user_message or ""
+    if not _SEND_ORDER_RE.search(text):
+        return False
+    if "?" in text and re.search(r"(?i)\b(какие|какой|какая|что|кого|кому|когда|где|сколько|куда|ли)\b", text):
+        return False
+    if _EMAIL_WORD_RE.search(text):
+        return True
+    last_reply = next((m.content for m in reversed(history) if isinstance(m, AIMessage)), "")
+    return isinstance(last_reply, str) and bool(_EMAIL_DRAFT_RE.search(last_reply))
+
+
 # How many of the most recent saved messages (both roles combined) to feed
 # back in as short-term conversational context, on top of whatever the
 # agent pulls from long-term memory via search_memory. Was kept small for
@@ -174,11 +204,12 @@ def handle_chat_turn_stream(
 
     message = mask_sensitive(message)
     graph = agent_graph.build_graph(user_id, enable_thinking=enable_thinking)
+    gmail_connected = bool(user_settings.get_gmail_refresh_token(user_id))
     system_prompt = build_system_prompt(
         today=_describe_now(user_id),
         intervals_icu_connected=bool(user_settings.get_intervals_icu_key(user_id)),
         google_calendar_connected=bool(user_settings.get_google_calendar_refresh_token(user_id)),
-        gmail_connected=bool(user_settings.get_gmail_refresh_token(user_id)),
+        gmail_connected=gmail_connected,
     )
     try:
         digest = memory_bridge.profile_digest(user_id, personal_data.now_local(user_id).date())
@@ -194,6 +225,7 @@ def handle_chat_turn_stream(
             + digest
         )
     history = _load_recent_history(user_id, conversation_id)
+    send_unavailable = not gmail_connected and wants_email_sent(message, history)
     logger.info("chat turn: loaded %d short-term history message(s) for conversation_id=%s", len(history), conversation_id)
 
     # Nudges the model to consider search_memory without permanently baking
@@ -385,8 +417,8 @@ def handle_chat_turn_stream(
         if claims_unperformed_action(message, run["reply"], run["action_tools"]):
             logger.warning("unperformed action claimed again, replacing reply: user_id=%s", user_id)
             yield {"type": "reset"}
-            run["reply"] = ACTION_NOT_DONE_REPLY
-            yield {"type": "token", "text": ACTION_NOT_DONE_REPLY}
+            run["reply"] = EMAIL_SEND_UNAVAILABLE_REPLY if send_unavailable else ACTION_NOT_DONE_REPLY
+            yield {"type": "token", "text": run["reply"]}
 
     reply = run["reply"]
     last_action = run["last_action"]
@@ -401,6 +433,9 @@ def handle_chat_turn_stream(
 
     reply = mask_sensitive(_humanize_sources(_rewrite_source_citations(reply, web_search_sources)))
     reply = _ensure_source_line(reply, run.get("used_tools") or [], bool(digest))
+    if send_unavailable and EMAIL_SEND_UNAVAILABLE_REPLY not in reply:
+        # Added, never replacing: the draft text itself stays in the reply.
+        reply = f"{reply}\n\n{EMAIL_SEND_UNAVAILABLE_NOTE}"
 
     _save_message(user_id, conversation_id, "user", message, None)
     _save_message(user_id, conversation_id, "assistant", reply, last_action)

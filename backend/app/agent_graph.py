@@ -58,6 +58,11 @@ _EXPLICIT_CALENDAR_RE = re.compile(
     r"(?i)\b(постав|запланир|назнач|создай|создать|добав|напомн|перенес|перенёс|перенос|сдвин|подвин|измени|"
     r"отмени|отменить|удали|удалить|убери|пригласи|schedule|remind|move|cancel|delete|reschedul)\w*"
 )
+# Extra verbs for external (MCP) action tools: "собери корзину", "оформи заказ", "сделай ссылку".
+_EXPLICIT_EXTERNAL_RE = re.compile(
+    r"(?i)\b(собер|собра|сформир|оформ|закаж|заказа|купи|купить|положи|полож|подбер|подобра|сдела|выполни|запусти|"
+    r"опубликуй|загрузи|buy|order|checkout|make|create|run|publish|upload)\w*"
+)
 _GUARDED_TOOLS: dict[str, re.Pattern[str]] = {
     **{name: _EXPLICIT_WRITE_RE for name in
        ("log_meal", "log_weight", "add_expense", "add_income", "create_task", "update_transaction")},
@@ -89,7 +94,8 @@ def _block_unrequested_writes(state: MessagesState, user_id: str | None = None) 
         if name in _GUARDED_TOOLS:
             return not _GUARDED_TOOLS[name].search(text)
         if name in mcp_writes:  # an external tool that changes something: any explicit action verb will do
-            return not any(p.search(text) for p in (_EXPLICIT_WRITE_RE, _EXPLICIT_MESSAGE_RE, _EXPLICIT_CALENDAR_RE))
+            return not any(p.search(text) for p in
+                           (_EXPLICIT_WRITE_RE, _EXPLICIT_MESSAGE_RE, _EXPLICIT_CALENDAR_RE, _EXPLICIT_EXTERNAL_RE))
         return False
 
     blocked = [tc for tc in last.tool_calls if unrequested(tc["name"])]
@@ -100,6 +106,38 @@ def _block_unrequested_writes(state: MessagesState, user_id: str | None = None) 
     blocked_ids = {tc["id"] for tc in blocked}
     allowed = [tc for tc in last.tool_calls if tc["id"] not in blocked_ids]
     trimmed = last.model_copy(update={"tool_calls": allowed})
+    return notes, {**state, "messages": [*state["messages"][:-1], trimmed]}
+
+
+MAX_MCP_CALLS_PER_TOOL = 6
+_MCP_LIMIT_NOTE = (
+    "НЕ ВЫПОЛНЕНО: этот внешний инструмент уже вызывался {n} раз в этом ответе. Больше не вызывай его — "
+    "ответь пользователю по уже полученным данным и, если нужно, предложи уточнить запрос."
+)
+
+
+def _limit_external_calls(state: MessagesState) -> tuple[list[ToolMessage], MessagesState]:
+    """A paged MCP catalog (a shop's discounts: 15 pages) had the model page
+    through all of it looking for one category until the recursion limit
+    killed the turn. Cap calls per external tool within one user turn."""
+    last = state["messages"][-1]
+    if not isinstance(last, AIMessage) or not last.tool_calls:
+        return [], state
+    counts: dict[str, int] = {}
+    for m in reversed(state["messages"][:-1]):
+        if isinstance(m, HumanMessage):
+            break
+        if isinstance(m, AIMessage):
+            for tc in m.tool_calls:
+                counts[tc["name"]] = counts.get(tc["name"], 0) + 1
+    over = [tc for tc in last.tool_calls
+            if tc["name"].startswith("mcp_") and counts.get(tc["name"], 0) >= MAX_MCP_CALLS_PER_TOOL]
+    if not over:
+        return [], state
+    notes = [ToolMessage(content=_MCP_LIMIT_NOTE.format(n=counts[tc["name"]]), tool_call_id=tc["id"], name=tc["name"])
+             for tc in over]
+    over_ids = {tc["id"] for tc in over}
+    trimmed = last.model_copy(update={"tool_calls": [tc for tc in last.tool_calls if tc["id"] not in over_ids]})
     return notes, {**state, "messages": [*state["messages"][:-1], trimmed]}
 
 
@@ -133,6 +171,8 @@ def build_graph(user_id: str, enable_thinking: bool = True) -> CompiledStateGrap
     # model's prompt or the UI — no tool has to remember to do it itself.
     def masked_tools_node(state: MessagesState, config) -> dict:
         blocked, state = _block_unrequested_writes(state, user_id)
+        limited, state = _limit_external_calls(state)
+        blocked = [*blocked, *limited]
         result = tool_node.invoke(state, config) if state["messages"][-1].tool_calls else {"messages": []}
         result = {**result, "messages": [*blocked, *result.get("messages", [])]}
         for msg in result.get("messages", []):

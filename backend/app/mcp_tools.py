@@ -23,6 +23,7 @@ and no behaviour change. Otherwise:
 from __future__ import annotations
 
 import asyncio
+import html
 import ipaddress
 import json
 import logging
@@ -46,7 +47,7 @@ logger = logging.getLogger(__name__)
 CONFIG_PATH = Path(os.environ.get("MCP_SERVERS_FILE", "") or Path(__file__).resolve().parent.parent / "mcp_servers.json")
 CONNECT_TIMEOUT = 20
 CALL_TIMEOUT = 40
-MAX_RESULT_CHARS = 6000
+MAX_RESULT_CHARS = 16000  # after _compact_text; a compacted 10-item catalog page is ~13k
 MAX_USER_SERVERS = 5
 MAX_TOOLS_PER_SERVER = 25
 # Local development only: lets a user-added server live on localhost / plain http.
@@ -184,6 +185,36 @@ def _result_text(content: Any) -> str:
     return json.dumps(content, ensure_ascii=False, default=str)
 
 
+_NOISE_KEYS = {"images", "image", "photos", "photo", "thumbnail", "thumbnails", "icons", "icon", "slug", "picture", "pictures"}
+_IMAGE_URL_RE = re.compile(r"(?i)^https?://\S+\.(webp|jpe?g|png|gif|svg|avif)(\?\S*)?$")
+
+
+def _compact(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {k: _compact(v) for k, v in value.items()
+                if k.lower() not in _NOISE_KEYS and v not in (None, "", [], {})}
+    if isinstance(value, list):
+        return [_compact(v) for v in value if not (isinstance(v, str) and _IMAGE_URL_RE.match(v))]
+    if isinstance(value, str):
+        value = html.unescape(value) if "&" in value else value
+        return value[:250].rstrip() + "…" if len(value) > 300 else value
+    return value
+
+
+def _compact_text(text: str) -> str:
+    """Catalog-style JSON (a shop's product list) is mostly image URLs and long
+    marketing copy; cut to 6000 chars it held 2-3 products per page and the
+    model paged through the whole catalog. Keep the facts, drop the noise."""
+    stripped = text.strip()
+    if not stripped.startswith(("{", "[")):
+        return text
+    try:
+        data = json.loads(stripped)
+    except ValueError:
+        return text
+    return json.dumps(_compact(data), ensure_ascii=False, separators=(",", ":"))
+
+
 def _safe_name(server: str, tool_name: str) -> str:
     name = re.sub(r"[^A-Za-z0-9_]", "_", f"mcp_{server}_{tool_name}")
     return name[:64]
@@ -205,7 +236,7 @@ def _wrap(server: str, tool: BaseTool) -> BaseTool:
         except Exception as exc:  # noqa: BLE001 — a failing external tool must not break the turn
             logger.warning("mcp %s.%s failed: %s", server, tool.name, _describe_exc(exc))
             return f"MCP-сервер «{server}» вернул ошибку: {_describe_exc(exc)}"
-        text = _result_text(content)
+        text = _compact_text(_result_text(content))
         if len(text) > MAX_RESULT_CHARS:
             text = text[:MAX_RESULT_CHARS] + "\n…[обрезано]"
         header = f"[Внешний источник: MCP-сервер «{server}»] {UNTRUSTED_NOTE}"

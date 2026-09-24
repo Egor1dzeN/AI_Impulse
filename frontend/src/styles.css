@@ -220,6 +220,7 @@ body.is-chat .stage::before{ opacity:0 }
    карточек «Ассистент заметил». Во время прокрутки — без анимации перехода. */
 body:not(.is-chat) .stage{
   transform:translateX(-50%) translateY(calc(-1 * var(--hero-scroll, 0px)));
+  opacity:var(--hero-fade, 1);
 }
 body.is-hero-scrolling .stage{ transition:none }
 

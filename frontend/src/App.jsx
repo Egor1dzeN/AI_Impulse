@@ -147,6 +147,8 @@ export default function App() {
     let idle;
     function onScroll() {
       root.style.setProperty('--hero-scroll', `${main.scrollTop}px`);
+      // Fades out as it leaves, so no half-orb lingers behind the header and the text scrolled under it.
+      root.style.setProperty('--hero-fade', String(Math.max(0, 1 - main.scrollTop / 220)));
       document.body.classList.add('is-hero-scrolling');
       clearTimeout(idle);
       idle = setTimeout(() => document.body.classList.remove('is-hero-scrolling'), 150);
@@ -158,6 +160,7 @@ export default function App() {
       clearTimeout(idle);
       document.body.classList.remove('is-hero-scrolling');
       root.style.setProperty('--hero-scroll', '0px');
+      root.style.setProperty('--hero-fade', '1');
     };
   }, [isChat]);
 

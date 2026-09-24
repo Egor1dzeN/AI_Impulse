@@ -6,6 +6,41 @@ import { useI18n } from '../lib/i18n.jsx';
 
 const uid = () => Math.random().toString(36).slice(2);
 
+const LARGE_PASTE_CHARS = 5000;
+
+// Pasted JSONL / a JSON array of records is a dataset, not a message: sent as
+// text it would skip the import (raw records, analytics, bank transactions,
+// the profile) and land in memory as one "said in chat just now" blob.
+// Returns {text, name, count} to attach as a file, or null.
+function detectDataset(raw) {
+  const text = (raw || '').trim();
+  if (!text) return null;
+  if (text.startsWith('[')) {
+    try {
+      const data = JSON.parse(text);
+      if (Array.isArray(data) && data.length >= 2 && data.every((r) => r && typeof r === 'object' && !Array.isArray(r))) {
+        return { text, ext: 'json', count: data.length };
+      }
+    } catch {
+      return null;
+    }
+    return null;
+  }
+  if (!text.startsWith('{')) return null;
+  const lines = text.split(/\r?\n/).filter((l) => l.trim());
+  if (lines.length < 2) return null;
+  let ok = 0;
+  for (const line of lines) {
+    try {
+      const rec = JSON.parse(line);
+      if (rec && typeof rec === 'object' && !Array.isArray(rec)) ok += 1;
+    } catch {
+      // not a record line
+    }
+  }
+  return ok / lines.length >= 0.9 ? { text: lines.join('\n'), ext: 'jsonl', count: ok } : null;
+}
+
 
 export default function Composer({ value, onChange, onSend, onStop, busy, reasoning, onToggleReasoning, progress }) {
   const { t } = useI18n();
@@ -16,6 +51,8 @@ export default function Composer({ value, onChange, onSend, onStop, busy, reason
   const [voiceState, setVoiceState] = useState('idle'); // idle | recording | transcribing
   const [voiceError, setVoiceError] = useState('');
   const [attachError, setAttachError] = useState('');
+  const [notice, setNotice] = useState('');
+  const pastedCountRef = useRef(0);
   // [{id, name, kind: 'document', content, flagged} | {id, name, kind: 'dataset', file}]
   const [attachments, setAttachments] = useState([]);
 
@@ -41,11 +78,37 @@ export default function Composer({ value, onChange, onSend, onStop, busy, reason
   // Documents are already extracted (hidden text stripped, secrets masked,
   // injections flagged); datasets are handed over as files — App loads
   // them into memory at send time.
+  const datasetAttachment = (dataset) => {
+    pastedCountRef.current += 1;
+    const n = pastedCountRef.current;
+    const name = `${t('composer.pastedFileName')}${n > 1 ? `_${n}` : ''}.${dataset.ext}`;
+    const file = new File([dataset.text], name, { type: 'application/json' });
+    return { id: uid(), name, kind: 'dataset', file };
+  };
+
   const sendNow = () => {
     if (busy || (!value.trim() && !attachments.length)) return;
-    onSend(value, attachments);
+    // Typed or dropped-in records (not pasted) still go to the import.
+    const dataset = detectDataset(value);
+    const outgoing = dataset ? [...attachments, datasetAttachment(dataset)] : attachments;
+    onSend(dataset ? '' : value, outgoing);
     setAttachments([]);
     setAttachError('');
+    setNotice('');
+  };
+
+  const onPaste = (e) => {
+    const text = e.clipboardData?.getData('text') || '';
+    const dataset = detectDataset(text);
+    if (dataset) {
+      e.preventDefault();
+      const attachment = datasetAttachment(dataset);
+      setAttachments((prev) => [...prev, attachment]);
+      setAttachError('');
+      setNotice(t('composer.pastedDataset', { count: dataset.count, name: attachment.name }));
+      return;
+    }
+    setNotice(text.length > LARGE_PASTE_CHARS ? t('composer.pasteLargeHint') : '');
   };
 
   const submit = (e) => {
@@ -186,6 +249,7 @@ export default function Composer({ value, onChange, onSend, onStop, busy, reason
           value={value}
           onChange={(e) => onChange(e.target.value)}
           onKeyDown={onKeyDown}
+          onPaste={onPaste}
         />
         <div className="composer__row">
           <button className="icon" type="button" id="attach" aria-label={t('composer.attachAriaLabel')} onClick={attach}>
@@ -249,6 +313,8 @@ export default function Composer({ value, onChange, onSend, onStop, busy, reason
       {progress ? <MemoryProgress percent={progress.percent} caption={progressCaption(progress, t)} /> : null}
       {voiceError || attachError ? (
         <p className="disclaimer disclaimer--error">{voiceError || attachError}</p>
+      ) : notice ? (
+        <p className="disclaimer disclaimer--notice">{notice}</p>
       ) : (
         <p className="disclaimer">{t('composer.disclaimer')}</p>
       )}

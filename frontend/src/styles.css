@@ -735,6 +735,7 @@ body.is-chat .dock{ transform:none }
   color:var(--ink-faint);
 }
 .disclaimer--error{ color:var(--flare-deep) }
+.disclaimer--notice{ color:var(--ink) }
 
 .memory-progress{
   width:var(--rail);

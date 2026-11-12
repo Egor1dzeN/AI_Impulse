@@ -1,121 +1,121 @@
-# Impulse — техническое описание
+# Impulse — technical overview
 
-> Описание для жюри (стенд, аккаунты, как загрузить данные и что проверить) — в [README.md](README.md).
+> Product overview (how to load data and what to try) is in [README.md](README.md).
 
-Персональный AI-ассистент с долгосрочной памятью и проактивными действиями
-(хакатон «AI-импульс 2.0», трек 2, кейс restore: — условия задачи в
+A personal AI assistant with long-term memory and proactive actions
+(**AI-Impulse 2.0** hackathon, track 2, Restore case; task description, in Russian:
 [`competition_task/README.md`](competition_task/README.md)).
 
-Ассистент сам накапливает знание о пользователе: из переписки (почта,
-Telegram), календаря и банковских уведомлений он собирает **цифровой
-профиль** с источником и периодом действия каждого факта, отвечает на точные
-вопросы по этим данным **детерминированно** (одинаково при любой формулировке),
-**сам замечает поводы** для действия и предлагает их, **выполняет действия**
-во внешних системах (Google Calendar, Gmail, Intervals.icu) только через
-подтверждение в UI, **маскирует** критичные данные на каждой границе и
-**сопротивляется промпт-инъекциям**, спрятанным в данных.
+The assistant builds up knowledge about its user on its own. From messages
+(email, Telegram), the calendar and bank notifications it assembles a **digital
+profile** where every fact has a source and a validity period. It answers precise
+questions about this data **deterministically** (the same way regardless of
+wording), **notices reasons to act** and suggests them, **performs actions** in
+external systems (Google Calendar, Gmail, Intervals.icu) only after confirmation
+in the UI, **masks** sensitive data at every boundary and **resists prompt
+injections** hidden in the data.
 
-Стек: **FastAPI** (backend) + **React 19 / Vite** (frontend) + **LangGraph**
-(агентный цикл) + **GigaChat** (диалог и LLM-часть памяти) + **cloud.ru**
-(эмбеддер, реранкер, Whisper) + самописная модульная **система долгосрочной
-памяти** (`memory/`) поверх SQLite и FAISS.
+Stack: **FastAPI** (backend) + **React 19 / Vite** (frontend) + **LangGraph**
+(agent loop) + **GigaChat** (dialogue and the LLM part of memory) + **cloud.ru**
+(embedder, reranker, Whisper) + a custom modular **long-term memory system**
+(`memory/`) on top of SQLite and FAISS.
 
-Локальный режим никуда не делся: если ключи API не заданы, backend
-откатывается на локальные модели (Qwen3-4B, Qwen3-Embedding/Reranker-0.6B,
-Qwen3-0.6B) — удобно для офлайн-разработки, но нужен GPU.
+Local mode is still there: if no API keys are set, the backend falls back to
+local models (Qwen3-4B, Qwen3-Embedding/Reranker-0.6B, Qwen3-0.6B). Handy for
+offline development, but it needs a GPU.
 
 ---
 
-## Содержание
+## Contents
 
-- [Быстрый запуск](#быстрый-запуск)
-- [Развёртывание стенда](#развёртывание-стенда)
-- [Переменные окружения](#переменные-окружения)
-- [Общая архитектура](#общая-архитектура)
-- [Модели и где они крутятся](#модели-и-где-они-крутятся)
-- [Backend: как обрабатывается сообщение](#backend-как-обрабатывается-сообщение)
-- [Импорт данных и цифровой профиль](#импорт-данных-и-цифровой-профиль)
-- [Детерминированная аналитика по данным](#детерминированная-аналитика-по-данным)
-- [Проактивность](#проактивность)
-- [Безопасность: маскирование, инъекции, подтверждения](#безопасность-маскирование-инъекции-подтверждения)
-- [Инструменты агента (function calling)](#инструменты-агента-function-calling)
-- [Интеграции](#интеграции)
-- [MCP-серверы](#mcp-серверы)
-- [Система памяти — подробно](#система-памяти--подробно)
-- [Хранилища данных](#хранилища-данных)
-- [API backend](#api-backend)
+- [Quick start](#quick-start)
+- [Environment variables](#environment-variables)
+- [Server deployment](#server-deployment)
+- [Architecture](#architecture)
+- [Models and where they run](#models-and-where-they-run)
+- [Backend: how a message is handled](#backend-how-a-message-is-handled)
+- [Data import and the digital profile](#data-import-and-the-digital-profile)
+- [Deterministic data analytics](#deterministic-data-analytics)
+- [Proactivity](#proactivity)
+- [Security: masking, injections, confirmations](#security-masking-injections-confirmations)
+- [Agent tools (function calling)](#agent-tools-function-calling)
+- [Integrations](#integrations)
+- [MCP servers](#mcp-servers)
+- [The memory system in detail](#the-memory-system-in-detail)
+- [Data storage](#data-storage)
+- [Backend API](#backend-api)
 - [Frontend](#frontend)
-- [Самопроверка на эталонных вопросах](#самопроверка-на-эталонных-вопросах)
-- [Структура репозитория](#структура-репозитория)
-- [Известные ограничения](#известные-ограничения)
+- [Self-check on reference questions](#self-check-on-reference-questions)
+- [Repository layout](#repository-layout)
+- [Known limitations](#known-limitations)
 
 ---
 
-## Быстрый запуск
+## Quick start
 
-Единственный способ запуска «одной командой» — `dev.sh` (Git Bash / MSYS;
-работает и на Windows, и на Linux/macOS). Это же **debug-запуск с горячей
-перезагрузкой**: backend и frontend подхватывают изменения на лету.
+The one-command way to start everything is `dev.sh` (Git Bash / MSYS; works on
+Windows, Linux and macOS). It is also the **debug run with hot reload**: backend
+and frontend pick up changes on the fly.
 
-### 0. Ключи
+### 0. Keys
 
 ```bash
 cp backend/.env.example backend/.env
-# и заполнить хотя бы GIGA_CHAT_IDE и GIGA_CHAT_EMBEDDING — см. ниже
+# fill in at least GIGA_CHAT_IDE and GIGA_CHAT_EMBEDDING — see below
 ```
 
-`backend.sh`/`dev.sh` сами подгружают `backend/.env` перед стартом uvicorn.
-Файл в `.gitignore`, в репозиторий не попадает.
+`backend.sh`/`dev.sh` load `backend/.env` before starting uvicorn.
+The file is in `.gitignore` and never goes into the repository.
 
-### Вариант 1 — одной командой (рекомендуется)
+### Option 1 — one command (recommended)
 
 ```bash
 ./dev.sh
 ```
 
-Убивает всё, что уже слушает порты 8001/5173, при первом запуске сам создаёт
-`backend/.venv`, ставит зависимости из `requirements.txt` и делает
-`npm install` во `frontend/`, затем поднимает оба процесса:
+It kills anything already listening on ports 8001/5173, creates `backend/.venv`
+on first run, installs dependencies from `requirements.txt`, runs `npm install`
+in `frontend/`, then starts both processes:
 
-- **backend** — `uvicorn ... --reload --reload-dir app`: изменения в
-  `backend/app/**/*.py` подхватываются автоматически;
-- **frontend** — `npm run dev` (Vite) с HMR.
+- **backend** — `uvicorn ... --reload --reload-dir app`: changes in
+  `backend/app/**/*.py` are picked up automatically;
+- **frontend** — `npm run dev` (Vite) with HMR.
 
-После запуска:
-- Backend: http://127.0.0.1:8001 (логи → `backend_run.log`, pid → `backend.pid`)
-- Frontend: http://localhost:5173 (логи → `frontend_run.log`, pid → `frontend.pid`)
+After start:
+- Backend: http://127.0.0.1:8001 (logs → `backend_run.log`, pid → `backend.pid`)
+- Frontend: http://localhost:5173 (logs → `frontend_run.log`, pid → `frontend.pid`)
 
-Открой в браузере **http://localhost:5173**, зарегистрируйся (логин/пароль
-или Google) и загрузи данные через панель **«Импорт данных»** (например,
-файлы из `competition_task/train_dataset/`).
+Open **http://localhost:5173**, register (username/password or Google) and
+attach dataset files in the chat (for example, files from
+`competition_task/train_dataset/`).
 
-Остановить оба процесса:
+Stop both processes:
 
 ```bash
 ./stop.sh
 ```
 
-> **Важно про `memory/`:** правки в пакете `memory/` (он лежит в корне
-> проекта, вне `backend/app/`) **не** подхватываются автоматически —
-> намеренно: там лениво живут модели/клиенты памяти, и полный перезапуск
-> uvicorn на каждую правку перезагружал бы их. После правок в `memory/`
-> перезапусти `./dev.sh` вручную.
+> **Note on `memory/`:** changes in the `memory/` package (it lives in the
+> project root, outside `backend/app/`) are **not** reloaded automatically. This
+> is intentional: memory models and clients are created lazily there, and a full
+> uvicorn restart on every edit would reload them. After editing `memory/`,
+> restart `./dev.sh` manually.
 
-### Вариант 2 — по отдельности, в двух терминалах
+### Option 2 — separately, in two terminals
 
 ```bash
-./backend.sh   # первый терминал — FastAPI/uvicorn, порт 8001
+./backend.sh   # first terminal — FastAPI/uvicorn, port 8001
 ```
 
 ```bash
-./frontend.sh  # второй терминал — Vite dev server, порт 5173
+./frontend.sh  # second terminal — Vite dev server, port 5173
 ```
 
-Оба работают в foreground (лог дублируется в `*_run.log`), останавливаются
-Ctrl+C или `./stop.sh`. Проверка backend'а: http://127.0.0.1:8001/api/health
+Both run in the foreground (output is also written to `*_run.log`) and stop with
+Ctrl+C or `./stop.sh`. Backend health check: http://127.0.0.1:8001/api/health
 
 <details>
-<summary>Совсем вручную, без скриптов</summary>
+<summary>Fully manual, without scripts</summary>
 
 ```bash
 cd backend
@@ -132,837 +132,823 @@ npm run dev
 
 </details>
 
-### Важно
+### Notes
 
-- Backend **должен** быть на `127.0.0.1:8001` — frontend проксирует `/api`
-  туда через Vite dev-proxy (`frontend/vite.config.js`), а CORS в
-  `backend/app/main.py` разрешён только для `localhost:5173`/`127.0.0.1:5173`.
-- `requirements.txt` по-прежнему тянет тяжёлые ML-зависимости (torch CUDA
-  12.8, transformers, bitsandbytes, faiss, sentence-transformers, gliner) —
-  они нужны для локального фолбэка и для GLiNER, который пока всегда
-  локальный. Первая установка долгая.
-- Первое сообщение может быть медленнее остальных: модели/клиенты памяти
-  лениво создаются при первом обращении (`memory/model_registry.py`,
-  singleton на процесс).
-- Развёртывание на сервер — см. [Развёртывание стенда](#развёртывание-стенда).
+- The backend **must** run on `127.0.0.1:8001`: the frontend proxies `/api`
+  there via the Vite dev proxy (`frontend/vite.config.js`), and CORS in
+  `backend/app/main.py` only allows `localhost:5173`/`127.0.0.1:5173`.
+- `requirements.txt` still pulls heavy ML dependencies (torch CUDA 12.8,
+  transformers, bitsandbytes, faiss, sentence-transformers, gliner). They are
+  needed for the local fallback and for GLiNER, which is always local for now.
+  The first install takes a while.
+- The first message can be slower than the rest: memory models and clients are
+  created lazily on first use (`memory/model_registry.py`, one singleton per
+  process).
+- For a server deployment, see [Server deployment](#server-deployment).
 
 ---
 
-## Переменные окружения
+## Environment variables
 
-Полный актуальный список с комментариями — `backend/.env.example`. Главное:
+The full, current list with comments is in `backend/.env.example`. The main ones:
 
-| Переменная | Что включает |
+| Variable | What it enables |
 |---|---|
-| `GIGA_CHAT_IDE` | ключ GigaChat. Включает GigaChat для **чата** (`GIGACHAT_MODEL`, по умолчанию `GigaChat-3-Ultra`) и для **LLM-части памяти** — извлечение, coreference, relation extraction, dreaming, валидация, грамматическая нормализация (`GIGACHAT_LITE_MODEL`, по умолчанию `GigaChat-2`). Без него — локальный Qwen3-4B |
-| `GIGA_CHAT_EMBEDDING` | на самом деле ключ **cloud.ru** foundation-models (имя историческое). Включает облачные `Qwen3-Embedding-0.6B`, `Qwen3-Reranker-0.6B` (те же чекпоинты, что локально — FAISS не нужно переиндексировать) и Whisper для голосового ввода |
-| `GOOGLE_CLIENT_SECRET` | OAuth для Google Calendar и Gmail (тот же OAuth-клиент, что и Google Sign-In; нужны включённые Calendar API/Gmail API и зарегистрированные redirect URI) |
-| `AUTH_SECRET_KEY` | секрет для подписи JWT |
-| `MAPBOX_TOKEN` | интерактивные карты и маршруты |
-| `REGISTRATION_CODE` | код приглашения: без него новый аккаунт (логин/пароль или Google) не зарегистрировать. Пусто — регистрация открыта |
-| `FRONTEND_URL`, `GOOGLE_CALENDAR_REDIRECT_URI`, `GMAIL_REDIRECT_URI` | адрес стенда и OAuth-callback'и для развёртывания не на localhost |
-| `GIGACHAT_FALLBACK_MODEL` | модель, на которую чат переключается, если у основной кончилась квота (402), по умолчанию `GigaChat-2` |
-| `MCP_SERVERS_FILE`, `MCP_ALLOW_PRIVATE_URLS` | путь к конфигу системных MCP-серверов; разрешить `http`/локальные адреса для MCP пользователей (только для разработки) |
-| `ASSISTANT_NOW` | (опционально) ISO-дата/время, «замораживает» текущий момент ассистента — для воспроизводимой проверки на датасете с фиксированной датой |
-| `GIGACHAT_USE_EMBEDDINGS` | опционально перевести эмбеддер на GigaChat (на тарифе `GIGACHAT_API_PERS` эмбеддинги отдают 402, поэтому по умолчанию выключено) |
-| `QWEN_4BIT`, `GLINER_DEVICE`, `GRAMMAR_DEVICE` | тонкая настройка локальных моделей |
+| `GIGA_CHAT_IDE` | GigaChat key. Enables GigaChat for **chat** (`GIGACHAT_MODEL`, default `GigaChat-3-Ultra`) and for the **LLM part of memory**: extraction, coreference, relation extraction, dreaming, validation, grammar normalization (`GIGACHAT_LITE_MODEL`, default `GigaChat-2`). Without it, local Qwen3-4B is used |
+| `GIGA_CHAT_EMBEDDING` | actually a **cloud.ru** foundation-models key (the name is historical). Enables cloud `Qwen3-Embedding-0.6B`, `Qwen3-Reranker-0.6B` (the same checkpoints as locally, so FAISS doesn't need reindexing) and Whisper for voice input |
+| `GOOGLE_CLIENT_SECRET` | OAuth for Google Calendar and Gmail (the same OAuth client as Google Sign-In; requires the Calendar API/Gmail API to be enabled and the redirect URIs registered) |
+| `AUTH_SECRET_KEY` | secret for signing JWTs. **Must** be set on any non-local deployment: without it an insecure development default is used |
+| `MAPBOX_TOKEN` | interactive maps and routes |
+| `REGISTRATION_CODE` | invite code: without it no new account (username/password or Google) can be registered. Empty means open registration |
+| `FRONTEND_URL`, `GOOGLE_CALENDAR_REDIRECT_URI`, `GMAIL_REDIRECT_URI` | public address and OAuth callbacks for deployments not on localhost |
+| `GIGACHAT_FALLBACK_MODEL` | model the chat switches to when the main one runs out of quota (402), default `GigaChat-2` |
+| `MCP_SERVERS_FILE`, `MCP_ALLOW_PRIVATE_URLS` | path to the system MCP servers config; allow `http`/private addresses for user MCP servers (development only) |
+| `ASSISTANT_NOW` | (optional) ISO date/time that "freezes" the assistant's current moment, for reproducible checks on a dataset with a fixed date |
+| `GIGACHAT_USE_EMBEDDINGS` | optionally switch the embedder to GigaChat (on the `GIGACHAT_API_PERS` plan embeddings return 402, so it is off by default) |
+| `QWEN_4BIT`, `GLINER_DEVICE`, `GRAMMAR_DEVICE` | fine-tuning of local models |
 
-Ключ Intervals.icu задаётся не в `.env`, а каждым пользователем в панели
-«Настройки» (проверяется сервером перед сохранением).
+The Intervals.icu key is not set in `.env`: each user enters their own in the
+"Settings" panel (the server validates it before saving).
 
 ---
 
-## Развёртывание стенда
+## Server deployment
 
-Стенд: **https://egor1dzen.ru** — Ubuntu 24.04, 2 systemd-сервиса и Caddy:
+Reference setup: Ubuntu 24.04, two systemd services and Caddy:
 
 ```
-браузер ──HTTPS──▶ Caddy (:443, Let's Encrypt, egor1dzen.ru/www, gzip, SSE без буферизации)
-                     └─▶ ai-impulse-frontend  vite preview (собранный frontend/dist), :5173
+browser ──HTTPS──▶ Caddy (:443, Let's Encrypt, your domain, gzip, SSE without buffering)
+                     └─▶ ai-impulse-frontend  vite preview (built frontend/dist), :5173
                             └─ /api/* ──▶ ai-impulse-backend  uvicorn app.main:app, 127.0.0.1:8001
 ```
 
-Бэкенд слушает только `127.0.0.1` — снаружи доступен лишь через прокси `/api`
-(`frontend/vite.config.js`).
+The backend listens only on `127.0.0.1` and is reachable from outside only
+through the `/api` proxy (`frontend/vite.config.js`).
 
-Первичная установка:
+Initial setup:
 
 ```bash
-git clone <репозиторий> ~/ai_impulse && cd ~/ai_impulse
+git clone <repository> ~/ai_impulse && cd ~/ai_impulse
 python3 -m venv backend/.venv
-backend/.venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu   # CPU-сборка, GPU не нужен
+backend/.venv/bin/pip install torch --index-url https://download.pytorch.org/whl/cpu   # CPU build, no GPU needed
 backend/.venv/bin/pip install -r backend/requirements.txt
-cp backend/.env.example backend/.env    # ключи GigaChat/cloud.ru, AUTH_SECRET_KEY, REGISTRATION_CODE,
-                                        # FRONTEND_URL и redirect URI Google под домен стенда
+cp backend/.env.example backend/.env    # GigaChat/cloud.ru keys, AUTH_SECRET_KEY, REGISTRATION_CODE,
+                                        # FRONTEND_URL and Google redirect URIs for your domain
 (cd frontend && npm ci && npm run build)
-# + unit-файлы systemd для обоих сервисов и Caddyfile с reverse_proxy, как на схеме
+# + systemd unit files for both services and a Caddyfile with reverse_proxy, as in the diagram
 ```
 
-Обновление — одной командой на сервере:
+Updating — one command on the server:
 
 ```bash
-cd ~/ai_impulse && ./deploy.sh          # git pull, зависимости/сборка только при изменениях,
-                                        # перезапуск затронутых сервисов, проверка /api/health
-./deploy.sh --force                     # пересобрать и перезапустить всё
+cd ~/ai_impulse && ./deploy.sh          # git pull, dependencies/build only when changed,
+                                        # restart affected services, check /api/health
+./deploy.sh --force                     # rebuild and restart everything
 ```
 
-**Журнал аудита** (`backend/app/audit.py`) — полная история того, кто что
-спросил и как система это обработала, в `backend/audit/audit-YYYY-MM-DD.jsonl`
-(одна JSON-строка на событие; папка вне `backend/data/`, её не стирают ни
-«Удалить всю память», ни очистка баз; всё замаскировано):
-- `http` — каждый запрос к `/api`: аккаунт (из JWT), IP, метод, путь, тело
-  запроса без паролей, статус, время, JSON-ответ;
+**Audit log** (`backend/app/audit.py`): a full history of who asked what and
+how the system handled it, in `backend/audit/audit-YYYY-MM-DD.jsonl` (one JSON
+line per event; the folder is outside `backend/data/`, so neither "Delete all
+memory" nor wiping the databases removes it; everything is masked):
+- `http` — every `/api` request: account (from the JWT), IP, method, path,
+  request body without passwords, status, timing, JSON response;
 - `chat_turn_start` / `tool_call` / `model_note` / `chat_retry` / `chat_error` /
-  `chat_turn_done` — ход чата целиком: вопрос, хэш системного промпта (сам
-  промпт — `audit/prompts/<sha>.txt`), каждый инструмент с аргументами и
-  результатом, отказы ограничителей, повторы, итоговый ответ и длительность;
-- `memory_update` — что память создала, обновила или отбросила.
+  `chat_turn_done` — the whole chat turn: the question, the system prompt hash
+  (the prompt itself is in `audit/prompts/<sha>.txt`), every tool call with
+  arguments and result, guard refusals, retries, the final answer and duration;
+- `memory_update` — what memory created, updated or discarded.
 
 ```bash
-backend/.venv/bin/python backend/scripts/audit_view.py                     # сводка по аккаунтам
-backend/.venv/bin/python backend/scripts/audit_view.py --user Test1        # хронология аккаунта
-backend/.venv/bin/python backend/scripts/audit_view.py --user Test1 --full # без сокращений
-backend/.venv/bin/python backend/scripts/audit_view.py --prompt <sha>      # системный промпт хода
+backend/.venv/bin/python backend/scripts/audit_view.py                        # summary per account
+backend/.venv/bin/python backend/scripts/audit_view.py --user <username>      # account timeline
+backend/.venv/bin/python backend/scripts/audit_view.py --user <username> --full  # untruncated
+backend/.venv/bin/python backend/scripts/audit_view.py --prompt <sha>         # system prompt of a turn
 ```
 
-Резервные копии баз, индекса и журнала — `backend/scripts/backup_db.py`
-(SQLite online backup, безопасно на работающем сервере), на стенде каждый час
-через cron в `~/backups/db/` (хранятся последние 72).
+Backups of the databases, the index and the audit log: `backend/scripts/backup_db.py`
+(SQLite online backup, safe on a running server). A typical setup runs it
+hourly via cron into `~/backups/db/`, keeping the last 72.
 
-Логи: `journalctl -u ai-impulse-backend -f` (секреты в логах маскируются),
-журнал запросов Caddy — `/var/lib/caddy/access.log`. Все данные — в
-`backend/data/` (см. [Хранилища данных](#хранилища-данных)); полная очистка
-стенда — остановить бэкенд и убрать эту папку, при старте база создаётся заново.
+Logs: `journalctl -u ai-impulse-backend -f` (secrets in logs are masked), Caddy
+access log: `/var/lib/caddy/access.log`. All data lives in `backend/data/`
+(see [Data storage](#data-storage)); to wipe a server completely, stop the
+backend and remove that folder, and the databases are recreated on start.
 
 ---
 
-## Общая архитектура
+## Architecture
 
 ```
 ┌──────────────────────┐   SSE (/api/chat)   ┌──────────────────────────────────────┐
 │  Frontend (Vite)      │ ─────────────────▶ │         FastAPI backend (backend/app) │
 │  React + Three.js +   │ ◀───────────────── │                                       │
-│  Mapbox               │  token/tool_call/  │  masking на входе/выходе/в логах      │
-│  панели: Память,      │  done              └───────┬───────────────────┬──────────┘
-│  Финансы, Настройки;  │                            │                   │
-│  датасет — в чате     │   POST /api/import         │                   │
+│  Mapbox               │  token/tool_call/  │  masking on input/output/in logs      │
+│  panels: Memory,      │  done              └───────┬───────────────────┬──────────┘
+│  Finance, Settings;   │                            │                   │
+│  datasets via chat    │   POST /api/import         │                   │
 └──────────┬───────────┘ ─────────────────────▶ personal_data         LangGraph agent
-           │                                    (нормализация, маска,  (agent_graph.py)
-           │ кнопки «Отправить»/                injection_guard,          │
-           │ «Подтвердить» на карточках         bank_parser)              │
-           │ черновиков                              │        ┌──────────┼───────────────┬──────────────┐
+           │                                    (normalization, mask,  (agent_graph.py)
+           │ "Send"/"Confirm" buttons           injection_guard,          │
+           │ on draft cards                     bank_parser)              │
+           │                                         │        ┌──────────┼───────────────┬──────────────┐
            ▼                                         │        │          │               │              │
    /api/gmail/send, /api/calendar/confirm           │   ChatGigaChat  data_tools     action tools   memory tools
-   (единственный путь к реальной записи             │   (или ChatQwen)  → personal_   (задачи, траты,  search_memory
-    наружу — агенту недоступен)                     │                   analytics    питание, карты,  list_memories
-                                                     │                   (без LLM)    погода, календарь, │
-                                                     │                                почта, Intervals) │
+   (the only path to real outward writes —          │   (or ChatQwen)  → personal_   (tasks, spending, search_memory
+    not available to the agent)                     │                   analytics    food, maps,      list_memories
+                                                     │                   (no LLM)     weather, calendar, │
+                                                     │                                email, Intervals) │
                                                      ▼                                                  ▼
-                                    фоновое извлечение фактов  ─────────────▶  memory/ — MemorySystem
+                                    background fact extraction  ─────────────▶  memory/ — MemorySystem
                                     + profile_builder                          (SQLite + FAISS,
-                                                                                см. «Система памяти»)
+                                                                                see "The memory system")
 ```
 
-Ключевые идеи:
+Key ideas:
 
-- **Два хранилища знаний с разными задачами.** Сырые импортированные данные
-  (`raw_emails`, `raw_calendar_events`, `raw_messages`, транзакции) лежат
-  в `app.db` дословно — на них отвечают детерминированные функции (суммы,
-  свободные окна, рейтинги). Нечёткая **фактовая память** (`memory/`) хранит
-  профиль: предпочтения, отношения, цели — с источником и периодом действия.
-- **Чат и запоминание — независимые пути.** Ответ стримится сразу, а
-  извлечение фактов из сообщения/импорта идёт в `BackgroundTasks`.
-- **Модель формулирует, код считает.** Все числа, даты и списки агент берёт
-  из функций, а не вычисляет сам — так ответ воспроизводим.
-- **Запись наружу — только через кнопку в UI.** Агент готовит черновики,
-  реальные вызовы Gmail/Calendar происходят только по клику пользователя.
+- **Two knowledge stores with different jobs.** Raw imported data
+  (`raw_emails`, `raw_calendar_events`, `raw_messages`, transactions) is stored
+  verbatim in `app.db` and answered by deterministic functions (sums, free
+  slots, rankings). Fuzzy **fact memory** (`memory/`) holds the profile:
+  preferences, relationships, goals, each with a source and validity period.
+- **Chatting and remembering are independent paths.** The answer is streamed
+  immediately, while fact extraction from the message/import runs in
+  `BackgroundTasks`.
+- **The model phrases, the code computes.** The agent takes all numbers, dates
+  and lists from functions instead of computing them, so answers are
+  reproducible.
+- **Outward writes only via a UI button.** The agent prepares drafts; real
+  Gmail/Calendar calls happen only when the user clicks.
 
 ---
 
-## Модели и где они крутятся
+## Models and where they run
 
-Все модели/клиенты создаются один раз на процесс через
-`memory/model_registry.py` (`ModelRegistry`, потокобезопасный singleton).
-Для каждой роли есть облачный бэкенд (используется, если задан ключ) и
-локальный фолбэк.
+All models and clients are created once per process via
+`memory/model_registry.py` (`ModelRegistry`, a thread-safe singleton). Every role
+has a cloud backend (used when its key is set) and a local fallback.
 
-| Роль | По умолчанию (с ключами) | Локальный фолбэк | Файлы |
+| Role | Default (with keys) | Local fallback | Files |
 |---|---|---|---|
-| Диалоговая LLM агента | **GigaChat** `GigaChat-3-Ultra` (`GIGA_CHAT_IDE`) | Qwen3-4B, 4-bit NF4 | `backend/app/chat_gigachat.py`, `chat_model.py`, `agent_graph.py::_build_llm` |
-| LLM памяти: извлечение, coreference, relations, dreaming, валидация | **GigaChat** `GigaChat-2` | тот же Qwen3-4B | `memory/gigachat_text_model.py`, `memory/qwen_model.py` |
-| Грамматическая нормализация фактов | **GigaChat** `GigaChat-2` | Qwen3-0.6B на CPU | `memory/gigachat_grammar_normalizer.py`, `memory_grammar_normalizer.py` |
-| Эмбеддер для поиска по памяти | **cloud.ru** `Qwen/Qwen3-Embedding-0.6B` (`GIGA_CHAT_EMBEDDING`) | тот же чекпоинт локально, 8-bit | `memory/cloud_ru_embedder.py`, `memory_embedder.py` |
-| Реранкер | **cloud.ru** `Qwen/Qwen3-Reranker-0.6B` (эндпоинт `/score`) | тот же чекпоинт локально, FP16 | `memory/cloud_ru_reranker.py`, `memory_reranker.py` |
-| Распознавание речи | **cloud.ru** `openai/whisper-large-v3` | — | `backend/app/transcription.py` |
-| NER (сущности для обогащения памяти) | — | **GLiNER** `urchade/gliner_multi-v2.1`, CPU | `memory/entity_enricher.py` |
+| Agent dialogue LLM | **GigaChat** `GigaChat-3-Ultra` (`GIGA_CHAT_IDE`) | Qwen3-4B, 4-bit NF4 | `backend/app/chat_gigachat.py`, `chat_model.py`, `agent_graph.py::_build_llm` |
+| Memory LLM: extraction, coreference, relations, dreaming, validation | **GigaChat** `GigaChat-2` | the same Qwen3-4B | `memory/gigachat_text_model.py`, `memory/qwen_model.py` |
+| Grammar normalization of facts | **GigaChat** `GigaChat-2` | Qwen3-0.6B on CPU | `memory/gigachat_grammar_normalizer.py`, `memory_grammar_normalizer.py` |
+| Memory search embedder | **cloud.ru** `Qwen/Qwen3-Embedding-0.6B` (`GIGA_CHAT_EMBEDDING`) | the same checkpoint locally, 8-bit | `memory/cloud_ru_embedder.py`, `memory_embedder.py` |
+| Reranker | **cloud.ru** `Qwen/Qwen3-Reranker-0.6B` (`/score` endpoint) | the same checkpoint locally, FP16 | `memory/cloud_ru_reranker.py`, `memory_reranker.py` |
+| Speech recognition | **cloud.ru** `openai/whisper-large-v3` | — | `backend/app/transcription.py` |
+| NER (entities for memory enrichment) | — | **GLiNER** `urchade/gliner_multi-v2.1`, CPU | `memory/entity_enricher.py` |
 
-Особенности GigaChat, которые обработаны в коде:
+GigaChat quirks handled in code:
 
-- содержимое сообщения с ролью `function` должно быть валидным JSON —
-  `chat_gigachat.py::_ensure_json_content()` оборачивает обычный текст
-  результатов инструментов;
-- `GigaChat-2` иногда вместо JSON-массива отдаёт несколько объектов подряд —
-  `gigachat_text_model.py::_repair_json_array()` это чинит.
+- the content of a message with the `function` role must be valid JSON;
+  `chat_gigachat.py::_ensure_json_content()` wraps plain-text tool results;
+- `GigaChat-2` sometimes returns several objects in a row instead of a JSON
+  array; `gigachat_text_model.py::_repair_json_array()` fixes that.
 
-Локальный `ChatQwen` — адаптер `BaseChatModel` над Qwen3-4B: список функций
-дописывается в системный промпт, модель отвечает блоком
-```` ```tool_call {...}``` ````, который парсится в `AIMessage.tool_calls`.
-Для графа оба бэкенда выглядят одинаково (`bind_tools()`/`invoke()`).
+The local `ChatQwen` is a `BaseChatModel` adapter over Qwen3-4B: the function
+list is appended to the system prompt, and the model replies with a
+```` ```tool_call {...}``` ```` block that is parsed into `AIMessage.tool_calls`.
+To the graph both backends look the same (`bind_tools()`/`invoke()`).
 
 ---
 
-## Backend: как обрабатывается сообщение
+## Backend: how a message is handled
 
-`POST /api/chat` (`backend/app/main.py`) отдаёт `text/event-stream` (SSE) с
-событиями `token`, `tool_call`, `done`. Один ход —
+`POST /api/chat` (`backend/app/main.py`) returns `text/event-stream` (SSE) with
+`token`, `tool_call` and `done` events. One turn is
 `agent.handle_chat_turn_stream` (`backend/app/agent.py`):
 
-1. Сообщение пользователя сразу проходит **маскирование**
-   (`masking.mask_sensitive`) — номер карты или пароль не попадут ни в
-   модель, ни в историю, ни в логи.
-2. Строится системный промпт (`prompts.build_system_prompt`) с текущим
-   моментом в часовом поясе пользователя (`personal_data.now_local`,
-   переопределяется `ASSISTANT_NOW`) и набором блоков в зависимости от
-   подключённых интеграций.
-3. Подгружаются последние `HISTORY_MESSAGE_LIMIT` сообщений **этого чата**
-   (`conversation_id`) — короткая память разговора.
-4. Собирается LangGraph-граф (`agent_graph.py`): `agent` ⇄ `tools`, пока
-   модель не ответит без вызова функции. Узел `tools` —
-   `ToolNode(handle_tool_errors=True)`: исключение в одном инструменте
-   превращается в сообщение для модели, а не роняет весь стрим. **Каждый
-   результат инструмента маскируется** (`mask_sensitive`/`mask_obj`) до
-   того, как попадёт в промпт или в UI.
-5. Список инструментов (`build_tool_list`): memory tools + data tools +
-   action tools (только для подключённых интеграций) + MCP.
-6. Постобработка ответа: сноски `[sources=[N]]` из `web_search`
-   превращаются в markdown-ссылки (`_rewrite_source_citations`), служебные
-   упоминания источников — в человекочитаемые.
-7. Реплика и ответ сохраняются в `chat_messages`; в фоне
-   (`extract_memory_background`) сообщение уходит в систему памяти.
+1. The user's message is **masked** right away (`masking.mask_sensitive`), so a
+   card number or password never reaches the model, the history or the logs.
+2. The system prompt is built (`prompts.build_system_prompt`) with the current
+   moment in the user's time zone (`personal_data.now_local`, overridable via
+   `ASSISTANT_NOW`) and a set of blocks depending on connected integrations.
+3. The last `HISTORY_MESSAGE_LIMIT` messages of **this chat**
+   (`conversation_id`) are loaded as short conversational memory.
+4. The LangGraph graph is assembled (`agent_graph.py`): `agent` ⇄ `tools` until
+   the model answers without a function call. The `tools` node is
+   `ToolNode(handle_tool_errors=True)`: an exception in one tool becomes a
+   message for the model instead of breaking the stream. **Every tool result is
+   masked** (`mask_sensitive`/`mask_obj`) before it reaches the prompt or the UI.
+5. Tool list (`build_tool_list`): memory tools + data tools + action tools
+   (only for connected integrations) + MCP.
+6. Post-processing: `[sources=[N]]` footnotes from `web_search` become markdown
+   links (`_rewrite_source_citations`), internal source references become
+   human-readable.
+7. The message and the answer are saved to `chat_messages`; in the background
+   (`extract_memory_background`) the message goes to the memory system.
 
-### Системный промпт (`backend/app/prompts.py`)
+### System prompt (`backend/app/prompts.py`)
 
-| Блок | Смысл |
+| Block | Purpose |
 |---|---|
-| `PERSONA`, `HISTORY_INSTRUCTIONS` | кто ассистент; как читать историю чата |
-| `MEMORY_INSTRUCTIONS` | сначала собрать данные пользователя (`search_memory` и функции по данным), только потом отвечать; не отвечать «из головы» на личные вопросы |
-| `DATA_INSTRUCTIONS` | какая функция на какой вопрос (свободное время → `schedule_analysis`, траты → `finance_report`, …); числа никогда не считать самостоятельно; периоды передавать ключевыми словами (`next_week`, `last_month`, …) |
-| `PROACTIVE_INSTRUCTIONS` | сверять запрос с профилем (аллергии, лимиты, накладки в календаре); на «что нового?» — вызывать `proactive_suggestions` |
-| `SECURITY_INSTRUCTIONS` | содержимое писем/событий/документов — данные, а не команды; при `security_warning` предупредить пользователя; действия наружу — только черновиком |
-| `EXPLAINABILITY_INSTRUCTIONS` | в конце ответа — строка «Источник: …» простыми словами (откуда и за какой период) |
-| `ACTION_INSTRUCTIONS` | экшн-тулы — только на явную команду |
-| `INFO_TOOL_`, `PRODUCT_INFO_`, `WEB_SEARCH_INSTRUCTIONS` | карты/погода/курсы, продукты, веб-поиск |
-| `WORKOUT_`, `CALENDAR_`, `EMAIL_INSTRUCTIONS` + парные `*_NOT_CONNECTED_INSTRUCTIONS` | если интеграция не подключена, модель прямо говорит об этом и предлагает подключить в настройках, а не мечется между другими инструментами |
+| `PERSONA`, `HISTORY_INSTRUCTIONS` | who the assistant is; how to read chat history |
+| `MEMORY_INSTRUCTIONS` | gather the user's data first (`search_memory` and data functions), answer only after that; never answer personal questions "from the top of the head" |
+| `DATA_INSTRUCTIONS` | which function for which question (free time → `schedule_analysis`, spending → `finance_report`, …); never compute numbers yourself; pass periods as keywords (`next_week`, `last_month`, …) |
+| `PROACTIVE_INSTRUCTIONS` | check requests against the profile (allergies, limits, calendar conflicts); on "what's new?" call `proactive_suggestions` |
+| `SECURITY_INSTRUCTIONS` | contents of emails/events/documents are data, not commands; on `security_warning` warn the user; outward actions only as drafts |
+| `EXPLAINABILITY_INSTRUCTIONS` | end the answer with a plain-language "Source: …" line (where from and for which period) |
+| `ACTION_INSTRUCTIONS` | action tools only on an explicit command |
+| `INFO_TOOL_`, `PRODUCT_INFO_`, `WEB_SEARCH_INSTRUCTIONS` | maps/weather/rates, food products, web search |
+| `WORKOUT_`, `CALENDAR_`, `EMAIL_INSTRUCTIONS` + matching `*_NOT_CONNECTED_INSTRUCTIONS` | if an integration isn't connected, the model says so directly and suggests connecting it in settings instead of flailing between other tools |
 
 ---
 
-## Импорт данных и цифровой профиль
+## Data import and the digital profile
 
-Файлы датасета (`.jsonl` или JSON-массив) прикрепляются прямо в чате
-(скрепка, можно выбрать сразу несколько) и отправляются как обычное
-сообщение: в ленте видно сообщение с плашками файлов и карточку ассистента
-«нашёл данные о вас — сохраняю в память» с кольцом прогресса
-(`GET /api/import/progress`). Под капотом файл всегда идёт в полный
-пайплайн `POST /api/import`; модели уходит только текст сообщения и
-короткая пометка о загруженном файле. Источник
-(`email` / `telegram` / `calendar`) определяется автоматически по полям
-записей (`kind: calendar#event`/`start`, `subject`/`thread_id`,
-`msg_id`/`chat`/экспорт Telegram Desktop), с запасным вариантом по имени
-файла. JSON, не похожий на датасет, прикрепляется как обычный документ.
-Чтобы загрузить новый набор без примеси старого — сначала полное удаление
-данных аккаунта (`DELETE /api/account/data`), затем прикрепить файлы.
+Dataset files (`.jsonl` or a JSON array) are attached directly in the chat
+(paperclip, several at once) and sent like a normal message. The feed shows the
+message with file chips and an assistant card "found data about you — saving to
+memory" with a progress ring (`GET /api/import/progress`). Under the hood the
+file always goes through the full `POST /api/import` pipeline; the model only
+gets the message text and a short note about the uploaded file. The source
+(`email` / `telegram` / `calendar`) is detected automatically from record
+fields (`kind: calendar#event`/`start`, `subject`/`thread_id`,
+`msg_id`/`chat`/Telegram Desktop export), with the file name as a fallback.
+JSON that doesn't look like a dataset is attached as a regular document.
+To load a new dataset without mixing in the old one, first delete all account
+data (`DELETE /api/account/data`), then attach the files.
 
-1. **Синхронно** (`personal_data.store_records`): каждая запись
-   нормализуется в единый формат, **маскируется**, проверяется
-   **injection_guard** и сохраняется дословно в `raw_*`-таблицы `app.db`.
-   Письма-уведомления банка разбираются `bank_parser.py` в транзакции
-   (формат-агностично: ключевое слово операции рядом с суммой, без привязки
-   к шаблону конкретного банка). Сразу после ответа на точные вопросы можно
-   отвечать.
-2. **В фоне**: записи, несущие знание о профиле и прошедшие проверку
-   безопасности, идут через пайплайн памяти (`memory_bridge.import_records` →
-   `ingest_email` / `ingest_telegram_message` (чанками по беседам) /
-   `ingest_calendar_event`) с настоящим `Source` — тип, id, дата, для событий
-   начало/конец. Помеченные подозрительными записи в память **не попадают**.
-3. **Цифровой профиль** (`profile_builder.py`) строится после импорта и
-   хранится в той же памяти как набор фактов с источниками:
-   - *вычисляемые* — имя и обращения к пользователю, домашний город (по
-     местам транзакций), финансы, распорядок, круг общения, подписки — чистая
-     арифметика по `personal_analytics`, одинаковая при каждой пересборке;
-   - *синтезируемые* — биография, отношения, спорт, предпочтения, цели —
-     один LLM-проход на область по детерминированно отобранным и помеченным
-     фрагментам, поэтому каждый факт привязан к конкретным источникам.
+1. **Synchronously** (`personal_data.store_records`): each record is
+   normalized into a common format, **masked**, checked by
+   **injection_guard** and stored verbatim in the `raw_*` tables of `app.db`.
+   Bank notification emails are parsed by `bank_parser.py` into transactions
+   (format-agnostic: an operation keyword next to an amount, not tied to any
+   specific bank's template). Precise questions can be answered immediately.
+2. **In the background**: records that carry profile knowledge and passed the
+   security check go through the memory pipeline (`memory_bridge.import_records`
+   → `ingest_email` / `ingest_telegram_message` (chunked by conversation) /
+   `ingest_calendar_event`) with a real `Source`: type, id, date, and for events
+   start/end. Records flagged as suspicious **never reach** memory.
+3. **The digital profile** (`profile_builder.py`) is built after import and
+   stored in the same memory as a set of facts with sources:
+   - *computed* — the user's name and how people address them, home city
+     (from transaction locations), finances, routine, social circle,
+     subscriptions: plain arithmetic over `personal_analytics`, identical on
+     every rebuild;
+   - *synthesized* — biography, relationships, sport, preferences, goals: one
+     LLM pass per area over deterministically selected and labelled fragments,
+     so every fact is tied to concrete sources.
 
-   Пересборка заменяет старые профильные факты
-   (`memory_bridge.replace_profile_facts`), дубликатов не возникает.
+   A rebuild replaces the old profile facts
+   (`memory_bridge.replace_profile_facts`), so no duplicates appear.
 
-Необязательные параметры API: `source` — задать источник явно; `replace` — стереть данные аккаунта и отменить ещё идущее
-фоновое извлечение от прошлого импорта; `sync_calendar` — дополнительно
-создать события в подключённом Google Calendar.
+Optional API parameters: `source` — set the source explicitly; `replace` — wipe
+the account's data and cancel any background extraction still running from a
+previous import; `sync_calendar` — also create the events in the connected
+Google Calendar.
 
-Экспорт памяти — `GET /api/memories/export` (замаскированный), полное
-удаление всех данных аккаунта — `DELETE /api/account/data`.
+Memory export: `GET /api/memories/export` (masked). Full deletion of all account
+data: `DELETE /api/account/data`.
 
 ---
 
-## Детерминированная аналитика по данным
+## Deterministic data analytics
 
-`backend/app/personal_analytics.py` — вся точная логика по импортированным
-данным, **без LLM**: одинаковые данные → одинаковые цифры при любой
-формулировке вопроса и в любой сессии. Агент вызывает её через
-`backend/app/data_tools.py` и только формулирует ответ.
+`backend/app/personal_analytics.py` holds all precise logic over imported data,
+**without an LLM**: the same data gives the same numbers regardless of wording
+and session. The agent calls it through `backend/app/data_tools.py` and only
+phrases the answer.
 
-| Инструмент | Что делает |
+| Tool | What it does |
 |---|---|
-| `data_overview` | что загружено: объёмы по источникам, диапазон дат |
-| `calendar_events` | события за период (с раскрытием повторяющихся), участники |
-| `schedule_analysis` | свободные окна от N минут, первое подходящее окно, самый загруженный день, кандидаты на перенос и то, что трогать нельзя |
-| `recurring_schedule` | регулярные события и привычки (в т.ч. из паттернов писем) |
-| `search_emails`, `get_email_thread` | поиск писем по теме/человеку/периоду, полный текст |
-| `inbox_overview` | входящие: неотвеченные, срочные, дедлайны и их статус |
-| `search_messages` | поиск по мессенджеру (чат, отправитель, период) |
-| `top_contacts` | с кем чаще общается пользователь (`scope` work/personal) |
-| `finance_report` | траты/доходы за период, категории, топ мест, сравнение месяцев |
-| `monthly_cashflow` | средний денежный поток по полным месяцам, отдельно — разовые доходы; «сколько могу откладывать» |
-| `proactive_suggestions` | см. ниже |
+| `data_overview` | what is loaded: volume per source, date range |
+| `calendar_events` | events for a period (recurring ones expanded), participants |
+| `schedule_analysis` | free slots of N minutes or more, the first suitable slot, the busiest day, candidates for rescheduling and what must not be touched |
+| `recurring_schedule` | recurring events and habits (including patterns from emails) |
+| `search_emails`, `get_email_thread` | search emails by topic/person/period, full text |
+| `inbox_overview` | inbox: unanswered, urgent, deadlines and their status |
+| `search_messages` | messenger search (chat, sender, period) |
+| `top_contacts` | who the user talks to most (`scope` work/personal) |
+| `finance_report` | spending/income for a period, categories, top places, month comparison |
+| `monthly_cashflow` | average cash flow over complete months, one-off income separately; "how much can I save" |
+| `proactive_suggestions` | see below |
 
-Периоды передаются ключевыми словами (`today`, `tomorrow`, `next_week`,
-`last_month`, `month_before_last`, `last_3_days`) или датами —
-`resolve_period` переводит их относительно текущего момента пользователя.
-
----
-
-## Проактивность
-
-`backend/app/proactive.py` — детекторы поводов действовать, которые
-ассистент находит в данных сам: письма, требующие ответа, и приближающиеся
-дедлайны; накладки/переносы важных встреч в календаре; финансовые аномалии.
-Каждый пункт — приоритет, объяснение, источник и конкретный следующий шаг
-через интеграцию (черновик ответа, событие в календаре, лимит трат) плюс
-готовый промпт для чата.
-
-Детекторы детерминированные. Их используют и стартовый экран
-(`GET /api/proactive`, карточки при открытии чата), и агент
-(`proactive_suggestions` — на «привет», «что нового?», «на что обратить
-внимание?»). Кроме того, `PROACTIVE_INSTRUCTIONS` заставляет агента сверять
-любой запрос с профилем: предупреждать о накладках в календаре, аллергенах,
-превышении трат.
+Periods are passed as keywords (`today`, `tomorrow`, `next_week`,
+`last_month`, `month_before_last`, `last_3_days`) or dates; `resolve_period`
+resolves them relative to the user's current moment.
 
 ---
 
-## Безопасность: маскирование, инъекции, подтверждения
+## Proactivity
 
-**Маскирование** (`backend/app/masking.py`) — номера карт (с проверкой
-Луна, остаются последние 4 цифры), CVV, номера счетов, паспорта/документы,
-пароли, токены, API-ключи. Применяется архитектурно, на каждой границе:
-при импорте (до хранения, эмбеддинга и отправки в LLM), на каждом
-результате инструмента (обёртка над `ToolNode`), на сообщении пользователя,
-на сохранённом ответе, в ответах API и экспорте и в логах
-(`MaskingLogFilter`, `install_log_masking`). Обычные персональные данные
-(имя, телефон, адрес) намеренно не маскируются — они нужны для работы.
+`backend/app/proactive.py` contains detectors of reasons to act that the
+assistant finds in the data on its own: emails that need a reply and upcoming
+deadlines; conflicts and reschedules of important calendar meetings; financial
+anomalies. Each item has a priority, an explanation, a source and a concrete
+next step via an integration (a reply draft, a calendar event, a spending
+limit), plus a ready prompt for the chat.
 
-**Защита от промпт-инъекций и фишинга** (`backend/app/injection_guard.py`):
-эвристики по нормализованному тексту (попытки переопределить инструкции,
-просьбы переслать/перевести/скрыть, фальшивые системные уведомления,
-запросы реквизитов) плюс проверка отправителя — похожие на известные
-домены (расстояние Левенштейна, подмена бренда), неустоявшиеся отправители.
-Помеченные записи хранятся (пользователь может их увидеть), но **не
-попадают в долгосрочную память** и в каждом результате инструмента несут
-`security_warning`, который модель обязана передать пользователю, а не
-выполнять.
-
-**Документы во вложениях** (`backend/app/documents.py`,
-`POST /api/documents/extract`): PDF/DOCX/текст разбираются на сервере;
-**скрытый текст** (белый/невидимый, крошечный шрифт, hidden-форматирование
-Word) отделяется и в модель не попадает — только предупреждение о нём.
-Видимый текст проверяется на инъекции, маскируется, из него детерминированно
-извлекаются даты и сроки (счёт — напоминание за 3 дня, договор — за срок
-уведомления), и всё это передаётся модели блоком, явно помеченным как данные.
-
-**Подтверждение действий наружу.** У агента **нет** инструментов, которые
-сами отправляют письмо или меняют календарь:
-- `draft_email` только готовит черновик → карточка в чате с кнопкой
-  «Отправить» → `POST /api/gmail/send`;
-- `create_calendar_event` / `update_calendar_event` /
-  `delete_calendar_event` готовят черновик → кнопка «Подтвердить» →
-  `POST /api/calendar/confirm`.
-
-Эти эндпоинты недостижимы из цикла вызова инструментов. Таблицы
-`sent_email_drafts` / `calendar_action_drafts` делают повторный клик
-(например, по устаревшей карточке после перезагрузки) безопасным no-op.
-
-**Детерминированные ограничители в графе** (`agent_graph.py`, срабатывают до
-выполнения инструмента, модель получает объяснение вместо результата):
-- `_block_unrequested_writes` — инструменты записи (`log_meal`, `add_expense`,
-  `create_task`, черновики писем и событий, MCP-инструменты «на запись»)
-  выполняются, только если в **сообщении самого пользователя** есть явная
-  просьба (глаголы «запиши/добавь», «напиши/отправь», «поставь/перенеси/отмени»…).
-  Текст вложенных документов при этом не учитывается — инъекция из письма или
-  файла действие не запустит, а вопрос «съела пасту на 650 ккал, сколько
-  осталось?» не запишет приём пищи;
-- `_limit_repeated_calls` — третий одинаковый вызов (та же функция и
-  аргументы) за ход отклоняется: модель не зацикливается, когда нужного
-  инструмента нет (например, «отправь» при неподключённом Gmail);
-- `_limit_external_calls` — не больше 6 вызовов одного MCP-инструмента за ход.
-
-Если Gmail не подключён, а пользователь просит отправить письмо, к ответу
-добавляется предупреждение (`agent.wants_email_sent`); ложное «отправлено»
-без вызова инструмента заменяется честным «ничего не сделано»
-(`claims_unperformed_action`).
-
-**Объяснимость**: ответ, основанный на данных пользователя, заканчивается
-строкой «Источник: …» (откуда и за какой период), а у каждого факта памяти
-хранятся `sources` и `valid_from`/`valid_until` — это видно в панели «Память».
+The detectors are deterministic. They are used by the start screen
+(`GET /api/proactive`, cards when a chat opens) and by the agent
+(`proactive_suggestions` — on "hi", "what's new?", "what should I pay attention
+to?"). In addition, `PROACTIVE_INSTRUCTIONS` makes the agent check every request
+against the profile: warn about calendar conflicts, allergens, overspending.
 
 ---
 
-## Инструменты агента (function calling)
+## Security: masking, injections, confirmations
 
-Все инструменты создаются заново на каждый запрос и замкнуты на `user_id`
-этого запроса — модель не видит и не может подставить `user_id` сама.
-Инструменты интеграций добавляются только если интеграция подключена.
+**Masking** (`backend/app/masking.py`) covers card numbers (with a Luhn check;
+the last 4 digits stay), CVV, account numbers, passports/IDs, passwords, tokens
+and API keys. It is applied architecturally at every boundary: on import
+(before storage, embedding and sending to the LLM), on every tool result (a
+wrapper around `ToolNode`), on the user's message, on the saved answer, in API
+responses and exports, and in logs (`MaskingLogFilter`, `install_log_masking`).
+Ordinary personal data (name, phone, address) is intentionally not masked: the
+assistant needs it to work.
 
-**Память** (`tools.build_memory_tools`):
+**Prompt injection and phishing protection** (`backend/app/injection_guard.py`):
+heuristics over normalized text (attempts to override instructions, requests to
+forward/transfer/hide something, fake system notices, requests for payment
+details) plus sender checks: look-alike domains (Levenshtein distance, brand
+spoofing) and unestablished senders. Flagged records are stored (the user can
+see them) but **never reach long-term memory**, and every tool result carrying
+them includes a `security_warning` that the model must relay to the user rather
+than act on.
 
-| Инструмент | Действие |
+**Document attachments** (`backend/app/documents.py`,
+`POST /api/documents/extract`): PDF/DOCX/text are parsed on the server;
+**hidden text** (white/invisible, tiny font, Word hidden formatting) is
+separated and never reaches the model, only a warning about it does. Visible
+text is checked for injections and masked; dates and deadlines are extracted
+from it deterministically (an invoice gets a reminder 3 days ahead, a contract
+one notice period ahead), and all of this is passed to the model in a block
+explicitly marked as data.
+
+**Confirmation of outward actions.** The agent has **no** tools that send an
+email or change the calendar by themselves:
+- `draft_email` only prepares a draft → a card in the chat with a "Send" button
+  → `POST /api/gmail/send`;
+- `create_calendar_event` / `update_calendar_event` / `delete_calendar_event`
+  prepare a draft → "Confirm" button → `POST /api/calendar/confirm`.
+
+These endpoints are unreachable from the tool-calling loop. The
+`sent_email_drafts` / `calendar_action_drafts` tables make a repeated click (for
+example on a stale card after a reload) a safe no-op.
+
+**Deterministic guards in the graph** (`agent_graph.py`; they fire before a tool
+runs, and the model gets an explanation instead of a result):
+- `_block_unrequested_writes` — write tools (`log_meal`, `add_expense`,
+  `create_task`, email and event drafts, "write" MCP tools) run only if the
+  **user's own message** contains an explicit request (verbs like
+  "record/add", "write/send", "schedule/move/cancel"…). Text of attached
+  documents doesn't count, so an injection from an email or a file can't trigger
+  an action, and a question like "I had pasta, 650 kcal, how much is left?"
+  doesn't log a meal;
+- `_limit_repeated_calls` — the third identical call (same function and
+  arguments) within a turn is rejected, so the model doesn't loop when the
+  needed tool doesn't exist (for example "send" with Gmail not connected);
+- `_limit_external_calls` — at most 6 calls of one MCP tool per turn.
+
+If Gmail isn't connected and the user asks to send an email, a warning is added
+to the answer (`agent.wants_email_sent`); a false "sent" without a tool call is
+replaced with an honest "nothing was done" (`claims_unperformed_action`).
+
+**Explainability:** an answer based on the user's data ends with a "Source: …"
+line (where from and for which period), and every memory fact stores `sources`
+and `valid_from`/`valid_until`, visible in the "Memory" panel.
+
+---
+
+## Agent tools (function calling)
+
+All tools are created anew for every request and bound to that request's
+`user_id`; the model never sees `user_id` and can't substitute it. Integration
+tools are added only when the integration is connected.
+
+**Memory** (`tools.build_memory_tools`):
+
+| Tool | Action |
 |---|---|
-| `search_memory(query)` | top-20 релевантных фактов (embed → FAISS → rerank) |
-| `list_memories(source?)` | весь профиль без ранжирования, опционально фильтр по источнику (`email`/`telegram`/`calendar`/`text`) |
+| `search_memory(query)` | top 20 relevant facts (embed → FAISS → rerank) |
+| `list_memories(source?)` | the whole profile without ranking, optionally filtered by source (`email`/`telegram`/`calendar`/`text`) |
 
-**Данные пользователя** — см. [Детерминированная аналитика](#детерминированная-аналитика-по-данным).
+**User data** — see [Deterministic data analytics](#deterministic-data-analytics).
 
-**Действия и справка** (`tools.build_action_tools`):
+**Actions and reference** (`tools.build_action_tools`):
 
-| Инструмент | Действие |
+| Tool | Action |
 |---|---|
-| `create_task`, `list_tasks` | задачи/напоминания |
-| `add_expense`, `add_income`, `list_transactions`, `update_transaction`, `get_finance_summary` | ручной учёт трат и доходов |
-| `log_meal`, `log_weight`, `get_health_summary` | питание (цель 2200 ккал) и вес |
+| `create_task`, `list_tasks` | tasks/reminders |
+| `add_expense`, `add_income`, `list_transactions`, `update_transaction`, `get_finance_summary` | manual spending and income tracking |
+| `log_meal`, `log_weight`, `get_health_summary` | food (2200 kcal target) and weight |
 | `get_product_info(barcode)`, `search_product(query)` | Open Food Facts |
-| `log_workout`, `get_workouts`, `get_workout_route` | Intervals.icu (если подключён ключ); маршрут тренировки рисуется на карте |
-| `create_calendar_event`, `get_calendar_events`, `update_calendar_event`, `delete_calendar_event` | Google Calendar (если подключён); изменения — только черновиком на подтверждение |
-| `list_emails`, `get_email`, `draft_email` | Gmail (если подключён); отправка — только кнопкой в UI |
-| `web_search(query)` | поиск в интернете через `ddgs`, со ссылками на источники |
-| `show_map(place)`, `build_route(origin, destination, profile)` | геокодинг (Nominatim) и интерактивная карта / маршрут (Mapbox) |
+| `log_workout`, `get_workouts`, `get_workout_route` | Intervals.icu (if a key is connected); the workout route is drawn on a map |
+| `create_calendar_event`, `get_calendar_events`, `update_calendar_event`, `delete_calendar_event` | Google Calendar (if connected); changes only as drafts for confirmation |
+| `list_emails`, `get_email`, `draft_email` | Gmail (if connected); sending only via the UI button |
+| `web_search(query)` | web search via `ddgs`, with source links |
+| `show_map(place)`, `build_route(origin, destination, profile)` | geocoding (Nominatim) and an interactive map / route (Mapbox) |
 | `get_weather(place)` | Open-Meteo |
-| `get_exchange_rate(currency)`, `get_exchange_rate_history(currency, days_ago)` | курсы ЦБ РФ |
+| `get_exchange_rate(currency)`, `get_exchange_rate_history(currency, days_ago)` | Central Bank of Russia rates |
 
-`GET /api/sandbox` отдаёт «песочницу» — последние задачи/траты/приёмы
-пищи/вес для панели «Память».
-
----
-
-## Интеграции
-
-Все интеграции устроены одинаково: учётные данные хранятся в строке
-`users`, инструменты добавляются только при наличии учётных данных, в
-промпте есть пара `X_INSTRUCTIONS` / `X_NOT_CONNECTED_INSTRUCTIONS`.
-
-- **Google Calendar** (`google_calendar.py`) и **Gmail** (`gmail.py`) —
-  OAuth через общий `google_oauth.py` (authorize URL, обмен кода, refresh,
-  revoke; `state` — подписанный JWT с `user_id` и назначением, т.к.
-  callback Google приходит без заголовка авторизации). Подключаются в
-  панели «Настройки» (`/api/google-calendar/connect`, `/api/gmail/connect`).
-- **Intervals.icu** — API-ключ, вставляется в «Настройках», проверяется
-  сервером перед сохранением.
-- **Голосовой ввод** (`transcription.py`, `POST /api/transcribe`) —
-  зажать кнопку микрофона в композере; браузерный webm/opus
-  перекодируется в mp3 через `imageio-ffmpeg` (встроенный ffmpeg, ничего
-  ставить не нужно) и уходит в Whisper на cloud.ru.
-- **Вложения документов** — см. [Безопасность](#безопасность-маскирование-инъекции-подтверждения).
-- **Карты** — Mapbox GL (`frontend/src/components/MapboxMap.jsx`), тема
-  карты следует теме приложения.
+`GET /api/sandbox` returns the "sandbox": recent tasks/spending/meals/weight for
+the "Memory" panel.
 
 ---
 
-## MCP-серверы
+## Integrations
 
-`backend/app/mcp_tools.py` — опциональное подключение внешних MCP-серверов
-через `langchain-mcp-adapters`. Пока `backend/mcp_servers.json` отсутствует
-или пуст — это no-op.
+All integrations work the same way: credentials are stored in the `users` row,
+tools are added only when credentials are present, and the prompt has an
+`X_INSTRUCTIONS` / `X_NOT_CONNECTED_INSTRUCTIONS` pair.
 
-Чтобы подключить: скопировать `backend/mcp_servers.example.json` в
-`backend/mcp_servers.json` (в `.gitignore`), поставить серверу
-`"enabled": true` (или убрать ключ) и описать его в формате
-`MultiServerMCPClient` (`streamable_http` с `url` либо `stdio` с
-`command`/`args`). Токены — через `${VAR}` из `backend/.env`. Инструменты
-подтягиваются при старте бэкенда (после правки конфига — перезапуск) и
-получают имена `mcp_<сервер>_<инструмент>`.
-
-Безопасность:
-- каждый сервер подключается отдельно с таймаутом: недоступный сервер виден
-  в статусе, но не мешает запуску;
-- ответ внешнего инструмента — данные, а не инструкции: он проходит
-  маскирование секретов, проверку на инъекции (`injection_guard`) и
-  помечается `UNTRUSTED_NOTE`, длина ограничена;
-- инструменты, которые что-то меняют (имя с `send/create/delete/update/…`
-  или аннотация `destructiveHint`), выполняются только если в сообщении
-  самого пользователя есть явная просьба о действии
-  (`agent_graph._block_unrequested_writes`) — инъекция из письма или
-  документа их не запустит;
-- статус серверов — блок «MCP-серверы» в настройках.
-
-**Свои серверы пользователя** (Настройки → MCP-серверы → «Добавить»: имя,
-адрес, необязательный токен; `GET/POST /api/mcp/servers`,
-`DELETE /api/mcp/servers/{id}`, таблица `user_mcp_servers`). Видны и
-доступны только этому пользователю; перед сохранением сервер проверяется
-подключением. Ограничения безопасности:
-- только удалённые серверы по `https` (streamable HTTP) — запуск локальных
-  команд (stdio) из интерфейса невозможен;
-- защита от SSRF: адрес должен резолвиться только в публичные IP
-  (localhost, 10/8, 192.168/16, 169.254.169.254 и т.п. запрещены); проверка
-  повторяется на каждом HTTP-запросе, редиректы не выполняются;
-- токен уходит только на бэкенд и обратно в браузер не отдаётся;
-- не больше 5 серверов на пользователя и 25 инструментов на сервер;
-- для локальной разработки: `MCP_ALLOW_PRIVATE_URLS=1` разрешает `http` и
-  локальные адреса (на сервере не включать).
-
-Пример публичного сервера без ключа: DeepWiki — `https://mcp.deepwiki.com/mcp`
-(вопросы по GitHub-репозиториям).
+- **Google Calendar** (`google_calendar.py`) and **Gmail** (`gmail.py`) — OAuth
+  via the shared `google_oauth.py` (authorize URL, code exchange, refresh,
+  revoke; `state` is a signed JWT with `user_id` and purpose, because Google's
+  callback arrives without an authorization header). Connected in the
+  "Settings" panel (`/api/google-calendar/connect`, `/api/gmail/connect`).
+- **Intervals.icu** — an API key entered in "Settings", validated by the server
+  before saving.
+- **Voice input** (`transcription.py`, `POST /api/transcribe`) — hold the
+  microphone button in the composer; browser webm/opus is transcoded to mp3 via
+  `imageio-ffmpeg` (bundled ffmpeg, nothing to install) and sent to Whisper on
+  cloud.ru.
+- **Document attachments** — see [Security](#security-masking-injections-confirmations).
+- **Maps** — Mapbox GL (`frontend/src/components/MapboxMap.jsx`); the map theme
+  follows the app theme.
 
 ---
 
-## Система памяти — подробно
+## MCP servers
 
-Система памяти живёт в `memory/` — отдельный, не зависящий от FastAPI пакет
-(импортируется плоскими путями, поэтому `backend/app/memory_bridge.py`
-добавляет `memory/` в `sys.path`). Единая точка входа — `MemorySystem`
-(`memory/memory_system.py`), singleton через `memory_bridge.get_memory_system`:
+`backend/app/mcp_tools.py` optionally connects external MCP servers via
+`langchain-mcp-adapters`. While `backend/mcp_servers.json` is missing or empty,
+it is a no-op.
 
-- `update(text, user_id, source=None)` — запомнить; `source` (`Source`:
-  тип email/telegram/calendar/text, id, время, для событий — `end_at`)
-  определяет источник и период действия извлечённых фактов;
-- `retrieve(query, user_id, top_k)` — найти;
-- `get_all(user_id)` — всё, включая неактивное;
-- `delete_all(user_id)` — удалить всё (с точечным удалением из FAISS).
+To connect one: copy `backend/mcp_servers.example.json` to
+`backend/mcp_servers.json` (in `.gitignore`), set `"enabled": true` for the
+server (or remove the key) and describe it in `MultiServerMCPClient` format
+(`streamable_http` with `url`, or `stdio` with `command`/`args`). Tokens come
+from `backend/.env` via `${VAR}`. Tools are loaded at backend start (restart
+after editing the config) and are named `mcp_<server>_<tool>`.
 
-Ручное добавление факта из панели «Память» идёт через
-`memory_bridge.handmade_memory`, профильные факты — через
+Security:
+- each server connects separately with a timeout: an unavailable server shows up
+  in the status but doesn't block startup;
+- an external tool's response is data, not instructions: it goes through secret
+  masking and the injection check (`injection_guard`), is marked with
+  `UNTRUSTED_NOTE`, and its length is limited;
+- tools that change something (name contains `send/create/delete/update/…` or
+  the `destructiveHint` annotation) run only if the user's own message contains
+  an explicit request (`agent_graph._block_unrequested_writes`), so an
+  injection from an email or a document can't trigger them;
+- server status is shown in the "MCP servers" block in settings.
+
+**User's own servers** (Settings → MCP servers → "Add": name, URL, optional
+token; `GET/POST /api/mcp/servers`, `DELETE /api/mcp/servers/{id}`, table
+`user_mcp_servers`). They are visible and available only to that user; the
+server is test-connected before saving. Security restrictions:
+- only remote `https` servers (streamable HTTP); launching local commands
+  (stdio) from the UI is impossible;
+- SSRF protection: the address must resolve only to public IPs (localhost,
+  10/8, 192.168/16, 169.254.169.254 and the like are rejected); the check is
+  repeated on every HTTP request, and redirects are not followed;
+- the token goes only to the backend and is never returned to the browser;
+- at most 5 servers per user and 25 tools per server;
+- for local development: `MCP_ALLOW_PRIVATE_URLS=1` allows `http` and private
+  addresses (never enable it on a server).
+
+Example of a public server without a key: DeepWiki — `https://mcp.deepwiki.com/mcp`
+(questions about GitHub repositories).
+
+---
+
+## The memory system in detail
+
+The memory system lives in `memory/`, a standalone package independent of
+FastAPI (it is imported with flat paths, so `backend/app/memory_bridge.py` adds
+`memory/` to `sys.path`). The single entry point is `MemorySystem`
+(`memory/memory_system.py`), a singleton via `memory_bridge.get_memory_system`:
+
+- `update(text, user_id, source=None)` — remember; `source` (`Source`: type
+  email/telegram/calendar/text, id, time, and `end_at` for events) defines the
+  source and validity period of the extracted facts;
+- `retrieve(query, user_id, top_k)` — find;
+- `get_all(user_id)` — everything, including inactive records;
+- `delete_all(user_id)` — delete everything (with targeted removal from FAISS).
+
+A fact added manually in the "Memory" panel goes through
+`memory_bridge.handmade_memory`; profile facts go through
 `replace_profile_facts`.
 
-Каждый текст проходит **пайплайн записи**
+Every text goes through the **write pipeline**
 (`MemoryPipeline.process`, `memory/memory_pipeline.py`):
 
 ```
-текст ──▶ CheapMemoryRouter ──▶ MemoryEnricher.process() ──▶ для каждого кандидата:
-          (skip / extract)      │                              MemoryMatcher.find_matches()
-                                 │  (Router → Unified LLM /            │
-                                 │   Rule-based fast-path /             ▼
-                                 │   Legacy pipeline)             MemoryConsolidator.decide()
-                                 ▼                                     │
-                        список EnrichedMemoryCandidate                ▼
-                                                                MemoryUpdater.apply()
-                                                                (пишет в SQLite)
-                                                                        │
-                                                                        ▼
-                                                        MemoryIndexManager.sync_after_pipeline()
-                                                              (инкрементально обновляет FAISS)
-                                                                        │
-                                                                        ▼
-                                                        DreamingEngine (по порогу изменений,
-                                                        best-effort: сбой не теряет факт)
+text ──▶ CheapMemoryRouter ──▶ MemoryEnricher.process() ──▶ for each candidate:
+         (skip / extract)      │                              MemoryMatcher.find_matches()
+                                │  (Router → Unified LLM /            │
+                                │   Rule-based fast-path /             ▼
+                                │   Legacy pipeline)             MemoryConsolidator.decide()
+                                ▼                                     │
+                       list of EnrichedMemoryCandidate               ▼
+                                                               MemoryUpdater.apply()
+                                                               (writes to SQLite)
+                                                                       │
+                                                                       ▼
+                                                       MemoryIndexManager.sync_after_pipeline()
+                                                             (incrementally updates FAISS)
+                                                                       │
+                                                                       ▼
+                                                       DreamingEngine (on a change threshold,
+                                                       best-effort: a failure never loses a fact)
 ```
 
-Ниже «LLM памяти» — это `GigaChat-2` через `GigaChatTextModel` или, без
-ключа, локальный Qwen3-4B (один и тот же интерфейс `generate()`).
+Below, "memory LLM" means `GigaChat-2` via `GigaChatTextModel` or, without a key,
+local Qwen3-4B (the same `generate()` interface).
 
-### 1. Дешёвый роутер (`CheapMemoryRouter`)
+### 1. Cheap router (`CheapMemoryRouter`)
 
-Первый фильтр, **до** любых моделей (`memory/cheap_memory_router.py`).
-Регэкспами отсекает то, что заведомо не память: пустые строки, короткие
-подтверждения («спасибо», «ок»), вопросы, явные команды («покажи»,
-«напомни», ...). Если сработал — дальше пайплайн не идёт.
+The first filter, **before** any model (`memory/cheap_memory_router.py`). It uses
+regexes to drop what is clearly not memory: empty strings, short
+acknowledgements ("thanks", "ok"), questions, explicit commands ("show",
+"remind", ...). If it fires, the pipeline stops there.
 
-### 2. Извлечение кандидатов памяти
+### 2. Extracting memory candidates
 
-`MemoryEnricher.process()` (`memory/enricher.py`) выбирает один из трёх
-маршрутов:
+`MemoryEnricher.process()` (`memory/enricher.py`) picks one of three routes:
 
-**a) Правило-ориентированный роутер (`MemoryInputRouter`,
-`memory/memory_input_router.py`)** — deterministic-слой без LLM:
-- `DROP` — вопрос/команда/подтверждение → ничего не сохраняется;
-- `FAST` — однозначно извлекается regex-правилами
-  (`memory/extractor_contextual.py`), включая «цель завершена»
+**a) Rule-based router (`MemoryInputRouter`,
+`memory/memory_input_router.py`)** — a deterministic layer without an LLM:
+- `DROP` — question/command/acknowledgement → nothing is saved;
+- `FAST` — unambiguously extracted by regex rules
+  (`memory/extractor_contextual.py`), including "goal completed"
   (`COMPLETION_PATTERN` → `MemoryType.STATE`, `event_type=goal_completion`);
-- иначе — эскалация к LLM.
+- otherwise — escalate to the LLM.
 
-Многосоставные сообщения разбираются по предложениям; если хоть одно не
-разбирается правилами или содержит местоимение со ссылкой на другое
-предложение — весь текст уходит в LLM целиком.
+Multi-part messages are split into sentences; if even one can't be handled by
+rules or contains a pronoun referring to another sentence, the whole text goes
+to the LLM.
 
-**b) `UnifiedMemoryAnalyzer`** (`memory/unified_memory_analyzer.py`) —
-**один** вызов LLM памяти: извлечение, классификация по 8 типам и отношения
-(subject-predicate-object) в одном JSON. Промпт запрещает сохранять
-вопросы/команды/разовые действия и требует отличать факты о пользователе от
-чужих, гипотетических и шуточных. Ответ разбирается терпимым парсером (умеет
-вытащить завершённые объекты из обрезанного JSON); затем удаляются
-«командные» предложения, проверяется пересечение с исходным текстом
-(`_has_source_evidence` — защита от выдуманных фактов), эвристическая
-переклассификация (procedure→preference, preference→goal).
+**b) `UnifiedMemoryAnalyzer`** (`memory/unified_memory_analyzer.py`) — **one**
+memory LLM call: extraction, classification into 8 types and relations
+(subject-predicate-object) in a single JSON. The prompt forbids saving
+questions/commands/one-off actions and requires distinguishing facts about the
+user from facts about others, hypotheticals and jokes. The response is parsed
+by a tolerant parser (it can recover complete objects from truncated JSON);
+then "command" sentences are removed, overlap with the source text is checked
+(`_has_source_evidence`, protection against invented facts), and heuristic
+reclassification is applied (procedure→preference, preference→goal).
 
-**c) Legacy-пайплайн** (`_legacy_process`, фолбэк) — `MemoryExtractor` +
-`MemoryValidator` отдельными вызовами.
+**c) Legacy pipeline** (`_legacy_process`, fallback) — `MemoryExtractor` +
+`MemoryValidator` as separate calls.
 
-**Типы памяти** (`memory/models.py`, `MemoryType`): `fact`, `preference`,
+**Memory types** (`memory/models.py`, `MemoryType`): `fact`, `preference`,
 `episode`, `entity`, `relationship`, `goal`, `state`, `procedure`.
 
-### 3. Обогащение (enrichment)
+### 3. Enrichment
 
-Запускается только когда эвристики решают, что это нужно:
+Runs only when heuristics decide it is needed:
 
-- **Coreference** (`memory/coreference.py`, LLM памяти) — разрешение
-  местоимений (legacy-путь, при наличии местоимения).
-- **Temporal** (`memory/temporal.py`) — временные выражения, всегда.
-- **Entity extraction** (GLiNER, `entity_enricher.py`) — если есть
-  `ENTITY`/`RELATIONSHIP` или маркер отношений («мой брат», «коллега»).
-- **Grounding** (`CandidateGrounder`) — привязка к сущностям и позиции в тексте.
-- **Subject resolution** (`SubjectResolver`) — о ком факт: пользователь или
-  третье лицо.
-- **Relation extraction/linking** (`RelationExtractor` + `RelationLinker`)
-  — для legacy-пути.
-- **Grammar normalization** — один батч-вызов на все кандидаты, правит
-  только падежи/согласование.
+- **Coreference** (`memory/coreference.py`, memory LLM) — pronoun resolution
+  (legacy path, when a pronoun is present).
+- **Temporal** (`memory/temporal.py`) — time expressions, always.
+- **Entity extraction** (GLiNER, `entity_enricher.py`) — if there is an
+  `ENTITY`/`RELATIONSHIP` or a relationship marker ("my brother", "a colleague").
+- **Grounding** (`CandidateGrounder`) — linking to entities and a position in
+  the text.
+- **Subject resolution** (`SubjectResolver`) — who the fact is about: the user
+  or a third party.
+- **Relation extraction/linking** (`RelationExtractor` + `RelationLinker`) —
+  for the legacy path.
+- **Grammar normalization** — one batch call for all candidates; it fixes only
+  cases and agreement (Russian grammar).
 
-Результат — `EnrichedMemoryCandidate`; всё обогащение складывается в
-`metadata` записи.
+The result is an `EnrichedMemoryCandidate`; all enrichment goes into the
+record's `metadata`.
 
-### 4. Сопоставление с существующей памятью (matching)
+### 4. Matching against existing memory
 
-`MemoryMatcher.find_matches()` (`memory/memory_matcher.py`) считает `score`
-0–1 со всеми **активными** записями пользователя:
+`MemoryMatcher.find_matches()` (`memory/memory_matcher.py`) computes a `score`
+from 0 to 1 against all **active** records of the user:
 
-- семантическая нормализация в (subject, predicate, object)
+- semantic normalization into (subject, predicate, object)
   (`SemanticMemoryNormalizer`);
-- текстовое сходство (`SequenceMatcher` + Jaccard, 65/35);
-- совпадение subject+predicate при другом object → score 0.88 (кандидат на
-  `SUPERSEDE`: «переехал из одного города в другой»);
-- завершение цели (`goal_completion`) против активной `GOAL` → 0.95.
+- text similarity (`SequenceMatcher` + Jaccard, 65/35);
+- same subject+predicate with a different object → score 0.88 (a `SUPERSEDE`
+  candidate: "moved from one city to another");
+- goal completion (`goal_completion`) against an active `GOAL` → 0.95.
 
-Порог отсечения по умолчанию `min_score=0.50`.
+Default cutoff: `min_score=0.50`.
 
-### 5. Консолидация (что делать с кандидатом)
+### 5. Consolidation (what to do with a candidate)
 
 `MemoryConsolidator.decide()` (`memory/memory_consolidator.py`):
 
-| Действие | Когда |
+| Action | When |
 |---|---|
-| `CREATE` | совпадений нет или они слабые |
-| `CONFIRM` | тот же смысл — запись «освежается» (`freshness=1.0`, confidence = max) |
-| `UPDATE` | score в `[0.70, 0.85)` — та же мысль другими словами → контент перезаписывается; также архивирует завершённую цель |
-| `SUPERSEDE` | то же subject+predicate, другое значение — старая запись `SUPERSEDED` (`valid_until` = сейчас), новая `ACTIVE` |
-| `CONFLICT` | запись со статусом `CONFLICTING` вместо тихой перезаписи |
-| `IGNORE` | ничего не делать |
+| `CREATE` | no matches, or only weak ones |
+| `CONFIRM` | same meaning — the record is "refreshed" (`freshness=1.0`, confidence = max) |
+| `UPDATE` | score in `[0.70, 0.85)` — the same idea in different words → content is overwritten; also archives a completed goal |
+| `SUPERSEDE` | same subject+predicate, different value — the old record becomes `SUPERSEDED` (`valid_until` = now), the new one `ACTIVE` |
+| `CONFLICT` | a record with status `CONFLICTING` instead of a silent overwrite |
+| `IGNORE` | do nothing |
 
-Пороги по умолчанию: `confirm_threshold=0.85`, `update_threshold=0.70`.
+Default thresholds: `confirm_threshold=0.85`, `update_threshold=0.70`.
 
-### 6. Применение решения (запись в БД)
+### 6. Applying the decision (writing to the DB)
 
 `MemoryUpdater.apply()` (`memory/memory_updater.py`) → `MemoryRepository`
-(таблица `memories` в `backend/data/memory.db`). В метаданные
-(`_build_metadata`) попадают `subject`, `entities`, `relations`,
-`temporal`, `grounding`, `source_text`, а для событий календаря —
-`event_start`/`event_end`. `valid_from` берётся из времени источника
-(письма, сообщения, начала события), а не из момента импорта.
+(the `memories` table in `backend/data/memory.db`). The metadata
+(`_build_metadata`) includes `subject`, `entities`, `relations`, `temporal`,
+`grounding`, `source_text`, and for calendar events `event_start`/`event_end`.
+`valid_from` comes from the source's time (the email, the message, the event
+start), not from the import time.
 
-Модель `Memory` (`memory/models.py`): `id`, `user_id`, `type`, `content`,
+The `Memory` model (`memory/models.py`): `id`, `user_id`, `type`, `content`,
 `confidence`, `importance`, `freshness`, `status`
 (`active`/`superseded`/`expired`/`archived`/`conflicting`), `sources`,
 `created_at`/`updated_at`/`valid_from`/`valid_until`, `metadata` (JSON).
 
-### 7. Векторный индекс и поиск (retrieval)
+### 7. Vector index and retrieval
 
-SQLite — источник истины; **FAISS — производный индекс**
-(`memory/faiss_memory_index.py`, `IndexFlatIP`, L2-нормализованные
-эмбеддинги).
+SQLite is the source of truth; **FAISS is a derived index**
+(`memory/faiss_memory_index.py`, `IndexFlatIP`, L2-normalized embeddings).
 
-- `MemoryIndexManager.ensure_ready()` при старте загружает индекс с диска
-  (`backend/data/memory_index/`) и сверяет с базой по SHA-256 сигнатурам;
-  при рассинхроне — полная пересборка.
-- После записи: `CREATE` — инкрементальное добавление, `UPDATE`/`SUPERSEDE`
-  — пересборка, удаление — точечное `remove(ids)`.
-- `backend/inspect_memory_index.py [user_id] [--vectors]` — dev-утилита:
-  показывает, что лежит в индексе, и находит рассинхрон с `memory.db`.
+- `MemoryIndexManager.ensure_ready()` loads the index from disk at startup
+  (`backend/data/memory_index/`) and checks it against the database using
+  SHA-256 signatures; on mismatch it rebuilds fully.
+- After a write: `CREATE` — incremental add, `UPDATE`/`SUPERSEDE` — rebuild,
+  delete — targeted `remove(ids)`.
+- `backend/inspect_memory_index.py [user_id] [--vectors]` — a dev utility that
+  shows what's in the index and finds mismatches with `memory.db`.
 
-Поиск (`MemorySystem.retrieve` → `MemoryRetrieverV2`):
+Retrieval (`MemorySystem.retrieve` → `MemoryRetrieverV2`):
 
-1. **FAISS** — запрос кодируется эмбеддером, топ-`candidate_k`, фильтр по
-   `user_id` и `status == ACTIVE`.
-2. **Реранкинг и пост-фильтры**: кросс-энкодер переранжирует кандидатов;
-   временной маркер в запросе становится жёстким фильтром; запросы про
-   цели поднимают `GOAL`; сущностные запросы («расскажи о ...») раскрывают
-   граф связей от лучшего seed'а (`_connected_memories`); иначе —
-   пороговый семантический фолбэк (сигмоида от logit'а, отсечение ниже
-   `0.01` и на резком обрыве скора) — `top_k` это максимум, а не
-   обязательство.
+1. **FAISS** — the query is embedded, top `candidate_k`, filtered by `user_id`
+   and `status == ACTIVE`.
+2. **Reranking and post-filters**: a cross-encoder reranks the candidates; a
+   time marker in the query becomes a hard filter; goal queries boost `GOAL`;
+   entity queries ("tell me about ...") expand the relation graph from the best
+   seed (`_connected_memories`); otherwise a thresholded semantic fallback
+   (sigmoid of the logit, cutoff below `0.01` and at a sharp score drop).
+   `top_k` is a maximum, not a promise.
 
-### 8. Как память попадает в ответ агента
+### 8. How memory gets into the agent's answer
 
-Автоматического впрыскивания памяти в промпт нет: агент сам вызывает
-`search_memory` / `list_memories` (иногда несколько раз с разными
-формулировками). Найденное форматируется `MemoryContextFormatter` и
-приходит модели как результат функции.
+There is no automatic injection of memory into the prompt: the agent calls
+`search_memory` / `list_memories` itself (sometimes several times with
+different phrasings). Results are formatted by `MemoryContextFormatter` and
+reach the model as a function result.
 
-### 9. Dreaming (batch-консолидация)
+### 9. Dreaming (batch consolidation)
 
-`memory/dreaming_engine.py::DreamingEngine` — запускается автоматически,
-когда накопилось достаточно изменений, или вручную кнопкой «Осмыслить»
-(`POST /api/memories/dream`). За один LLM-проход сливает явные дубликаты в
-обобщённую формулировку и архивирует устаревшее/отменённое/завершённое.
-Физически ничего не удаляется — только `status=ARCHIVED`.
+`memory/dreaming_engine.py::DreamingEngine` runs automatically when enough
+changes have accumulated, or manually via the "Reflect" button
+(`POST /api/memories/dream`). In one LLM pass it merges obvious duplicates into
+a generalized phrasing and archives outdated/cancelled/completed records.
+Nothing is physically deleted, only `status=ARCHIVED`.
 
 ---
 
-## Хранилища данных
+## Data storage
 
-Всё лежит в `backend/data/` (создаётся автоматически, исключено из git):
+Everything lives in `backend/data/` (created automatically, excluded from git):
 
-| Файл/папка | Что содержит |
+| File/folder | Contents |
 |---|---|
-| `app.db` | SQLite приложения (`backend/app/db.py`): `users` (в т.ч. учётные данные интеграций), `conversations`, `chat_messages`, `tasks`, `expenses` (ручные траты/доходы и транзакции из банковских писем), `meals`, `weights`, `raw_emails`, `raw_calendar_events`, `raw_messages` (импорт с флагами безопасности), `imported_calendar_events`, `sent_email_drafts`, `calendar_action_drafts` |
-| `memory.db` | SQLite: таблица `memories` — вся долгосрочная память |
-| `memory_index/` | `memories.faiss` + `memory_ids.json` (id→вектор + SHA-256 сигнатуры) |
+| `app.db` | the app's SQLite (`backend/app/db.py`): `users` (including integration credentials), `conversations`, `chat_messages`, `tasks`, `expenses` (manual spending/income and transactions from bank emails), `meals`, `weights`, `raw_emails`, `raw_calendar_events`, `raw_messages` (imports with security flags), `imported_calendar_events`, `sent_email_drafts`, `calendar_action_drafts` |
+| `memory.db` | SQLite: the `memories` table — all long-term memory |
+| `memory_index/` | `memories.faiss` + `memory_ids.json` (id→vector + SHA-256 signatures) |
 
-Авторизация — JWT (`backend/app/auth.py`), регистрация по логину/паролю
-(bcrypt) или через Google Sign-In. `user_id` берётся только из проверенного
-токена.
+Authentication: JWT (`backend/app/auth.py`), registration with
+username/password (bcrypt) or Google Sign-In. `user_id` is taken only from a
+verified token.
 
 ---
 
-## API backend
+## Backend API
 
-| Метод | Путь | Описание |
+| Method | Path | Description |
 |---|---|---|
-| `GET` | `/api/health` | проверка живости |
-| `POST` | `/api/auth/register`, `/api/auth/login` | `{username, password, invite_code?}` → `{access_token}` (`invite_code` обязателен при заданном `REGISTRATION_CODE`) |
+| `GET` | `/api/health` | liveness check |
+| `POST` | `/api/auth/register`, `/api/auth/login` | `{username, password, invite_code?}` → `{access_token}` (`invite_code` is required when `REGISTRATION_CODE` is set) |
 | `POST` | `/api/auth/google` | `{id_token}` → `{access_token}` |
-| `POST`/`GET` | `/api/conversations` | создать чат / список чатов |
-| `DELETE` | `/api/conversations/{id}` | удалить чат |
-| `POST` | `/api/chat` | `{conversation_id, message, enable_thinking?}` → SSE (`token`/`tool_call`/`done`) + фоновая запись в память |
-| `GET` | `/api/history?conversation_id=...` | история чата |
-| `POST` | `/api/transcribe` | аудио → текст (Whisper на cloud.ru) |
-| `POST` | `/api/documents/extract` | PDF/DOCX/текст → безопасный блок для чата (без скрытого текста, с маскированием и датами) |
-| `GET` | `/api/proactive` | проактивные подсказки для стартового экрана |
-| `POST` | `/api/import` | импорт `email`/`telegram`/`calendar` (`file`, `source?` — иначе автоопределение, `replace?`, `sync_calendar?`) |
-| `GET` | `/api/memories` | все записи памяти (включая неактивные) |
-| `GET` | `/api/memories/export` | экспорт памяти (замаскированный) |
-| `GET` | `/api/memories/search?q=...` | семантический поиск по памяти |
-| `POST` | `/api/memories` | `{content}` — добавить факт вручную |
-| `POST` | `/api/memories/dream` | batch-консолидация |
-| `DELETE` | `/api/memories/{id}` | удалить запись памяти |
-| `DELETE` | `/api/account/data` | удалить все данные аккаунта (память, импорт, записи) |
-| `GET` | `/api/sandbox` | последние задачи/траты/приёмы пищи/вес |
-| `GET` | `/api/finance/transactions`, `/api/finance/summary` | данные для панели «Финансы» |
-| `GET`/`PUT` | `/api/settings` | настройки пользователя (ключ Intervals.icu, статусы интеграций) |
-| `GET`/`POST` | `/api/mcp/servers` | MCP-серверы: системные (только чтение) и свои; добавить `{name, url, token?}` |
-| `DELETE` | `/api/mcp/servers/{id}` | удалить свой MCP-сервер |
-| `GET` | `/api/google-calendar/connect`, `/callback`; `POST` `/disconnect` | OAuth Google Calendar |
-| `GET` | `/api/gmail/connect`, `/callback`; `POST` `/disconnect` | OAuth Gmail |
-| `POST` | `/api/gmail/send` | отправить черновик — только с кнопки в UI |
-| `POST` | `/api/calendar/confirm` | выполнить create/update/delete события — только с кнопки в UI |
+| `POST`/`GET` | `/api/conversations` | create a chat / list chats |
+| `DELETE` | `/api/conversations/{id}` | delete a chat |
+| `POST` | `/api/chat` | `{conversation_id, message, enable_thinking?}` → SSE (`token`/`tool_call`/`done`) + background memory write |
+| `GET` | `/api/history?conversation_id=...` | chat history |
+| `POST` | `/api/transcribe` | audio → text (Whisper on cloud.ru) |
+| `POST` | `/api/documents/extract` | PDF/DOCX/text → safe block for the chat (no hidden text, masked, with dates) |
+| `GET` | `/api/proactive` | proactive suggestions for the start screen |
+| `POST` | `/api/import` | import `email`/`telegram`/`calendar` (`file`, `source?` — otherwise auto-detected, `replace?`, `sync_calendar?`) |
+| `GET` | `/api/memories` | all memory records (including inactive) |
+| `GET` | `/api/memories/export` | memory export (masked) |
+| `GET` | `/api/memories/search?q=...` | semantic memory search |
+| `POST` | `/api/memories` | `{content}` — add a fact manually |
+| `POST` | `/api/memories/dream` | batch consolidation |
+| `DELETE` | `/api/memories/{id}` | delete a memory record |
+| `DELETE` | `/api/account/data` | delete all account data (memory, imports, records) |
+| `GET` | `/api/sandbox` | recent tasks/spending/meals/weight |
+| `GET` | `/api/finance/transactions`, `/api/finance/summary` | data for the "Finance" panel |
+| `GET`/`PUT` | `/api/settings` | user settings (Intervals.icu key, integration statuses) |
+| `GET`/`POST` | `/api/mcp/servers` | MCP servers: system ones (read-only) and the user's own; add `{name, url, token?}` |
+| `DELETE` | `/api/mcp/servers/{id}` | delete the user's own MCP server |
+| `GET` | `/api/google-calendar/connect`, `/callback`; `POST` `/disconnect` | Google Calendar OAuth |
+| `GET` | `/api/gmail/connect`, `/callback`; `POST` `/disconnect` | Gmail OAuth |
+| `POST` | `/api/gmail/send` | send a draft — only from the UI button |
+| `POST` | `/api/calendar/confirm` | perform an event create/update/delete — only from the UI button |
 
-Все эндпоинты, кроме health/auth/OAuth-callback, требуют
-`Authorization: Bearer <token>`; чужой `conversation_id` → 404.
+All endpoints except health/auth/OAuth callbacks require
+`Authorization: Bearer <token>`; someone else's `conversation_id` → 404.
 
 ---
 
 ## Frontend
 
-React 19 + Vite, без стейт-менеджера. На стартовом экране чата (`App.jsx`)
-показываются проактивные подсказки из `/api/proactive` — клик отправляет
-готовый запрос в чат. Интерфейс на русском и английском
-(`lib/i18n.jsx`), светлая/тёмная/системная тема (`lib/settings.js`).
+React 19 + Vite, no state manager. The chat start screen (`App.jsx`) shows
+proactive suggestions from `/api/proactive`; a click sends a ready request to
+the chat. The UI is in Russian and English (`lib/i18n.jsx`), with
+light/dark/system themes (`lib/settings.js`).
 
-- `Login.jsx` — вход/регистрация, Google Sign-In;
-- `Chat.jsx` — сообщения с markdown, индикация вызовов инструментов,
-  встроенные карты и маршруты (`MapboxMap.jsx`), карточки-черновики письма
-  (кнопка «Отправить») и событий календаря (кнопка «Подтвердить»),
-  «thinking»-фразы во время ожидания;
-- `Composer.jsx` — ввод с авто-расширением, голосовой ввод (зажать и
-  говорить), прикрепление документов и датасетов (`.json`/`.jsonl` при
-  отправке уходят в импорт с автоопределением источника), переключатель
-  «Размышления»;
-- `MemoryPanel.jsx` — что ассистент запомнил (с источниками и периодом),
-  ручное добавление, семантический поиск, удаление, «Осмыслить»;
-- `FinancePanel.jsx` — транзакции и сводка по месяцам/категориям;
-- `SettingsPanel.jsx` — тема, язык, подключение Intervals.icu / Google
-  Calendar / Gmail, MCP-серверы (`McpSettings.jsx`), удаление всех данных
-  аккаунта;
-- `MemoryProgress.jsx` — кольцо прогресса фонового наполнения памяти после импорта;
-- `ChatList.jsx`, `Menu.jsx`, `OrbCanvas.jsx` (Three.js-«орб» состояния).
+- `Login.jsx` — sign in/registration, Google Sign-In;
+- `Chat.jsx` — messages with markdown, tool call indicators, embedded maps and
+  routes (`MapboxMap.jsx`), draft cards for emails ("Send" button) and calendar
+  events ("Confirm" button), "thinking" phrases while waiting;
+- `Composer.jsx` — auto-growing input, voice input (hold and speak), document
+  and dataset attachments (`.json`/`.jsonl` go to import with source
+  auto-detection on send), a "Thinking" toggle;
+- `MemoryPanel.jsx` — what the assistant remembered (with sources and periods),
+  manual add, semantic search, delete, "Reflect";
+- `FinancePanel.jsx` — transactions and a summary by month/category;
+- `SettingsPanel.jsx` — theme, language, connecting Intervals.icu / Google
+  Calendar / Gmail, MCP servers (`McpSettings.jsx`), deleting all account data;
+- `MemoryProgress.jsx` — progress ring for background memory filling after an import;
+- `ChatList.jsx`, `Menu.jsx`, `OrbCanvas.jsx` (the Three.js status "orb").
 
-`lib/api.js` — тонкий клиент с ручным разбором SSE; все запросы идут на
-относительный `/api/...` через Vite-прокси. `lib/auth.js` хранит JWT в
+`lib/api.js` is a thin client with manual SSE parsing; all requests go to a
+relative `/api/...` through the Vite proxy. `lib/auth.js` stores the JWT in
 `localStorage`.
 
 ---
 
-## Самопроверка на эталонных вопросах
+## Self-check on reference questions
 
-`competition_task/eval_reference.py` прогоняет контрольные вопросы из
-`competition_task/train_dataset/reference_answers.md` через настоящего агента: грузит
-датасет в отдельного eval-пользователя, фиксирует «сейчас» на опорный момент
-датасета (`ASSISTANT_NOW`), задаёт каждый вопрос **дважды** разными
-формулировками в новых чатах (как жюри) и проверяет, что оба ответа содержат
-ожидаемые значения.
+`competition_task/eval_reference.py` runs the control questions from
+`competition_task/train_dataset/reference_answers.md` through the real agent: it
+loads the dataset into a separate eval user, freezes "now" at the dataset's
+reference moment (`ASSISTANT_NOW`), asks every question **twice** with different
+wording in new chats and checks that both answers contain the expected values.
 
 ```bash
-python competition_task/eval_reference.py                  # загрузить + спросить всё
+python competition_task/eval_reference.py                  # load + ask everything
 python competition_task/eval_reference.py --no-load q11 q14
-python competition_task/eval_reference.py --with-memory    # ещё и заполнить фактовую память (медленно)
-python competition_task/eval_reference.py --security       # подложить атаки в данные
+python competition_task/eval_reference.py --with-memory    # also fill fact memory (slow)
+python competition_task/eval_reference.py --security       # plant attacks in the data
 python competition_task/eval_reference.py --data other_dir --now 2026-10-01T10:00:00+03:00
 ```
 
-Нужен `backend/.env` с ключами GigaChat — каждый вопрос это реальный вызов
-LLM. Открытые эталонные данные — только пример: жюри проверяет на другом,
-закрытом датасете, поэтому решения должны обобщаться, а не подгоняться.
+Requires `backend/.env` with GigaChat keys: every question is a real LLM call.
+The open reference data is only an example; the final evaluation used a
+different, closed dataset, so solutions must generalize rather than be tuned to
+it.
 
-`competition_task/test_memory_emails.py` — отдельная проверка извлечения
-фактов из писем.
+`competition_task/test_memory_emails.py` is a separate check of fact extraction
+from emails.
 
-**Серии датасетов.** `competition_task/datasets/` — генератор синтетических
-персон (`gen.py`, `personas.py`) и прогон «как жюри» через живой API: полная
-очистка аккаунта → загрузка → каждый вопрос дважды разными формулировками в
-новых чатах → проверки безопасности → оценка по критериям конкурса:
+**Dataset series.** `competition_task/datasets/` contains a synthetic persona
+generator (`gen.py`, `personas.py`) and an end-to-end run through the live API:
+full account wipe → upload → every question twice with different wording in new
+chats → security checks → grading by the competition criteria:
 
 ```bash
-bash competition_task/datasets/run_series.sh <tag> maria artem olga   # по очереди + сводка
+bash competition_task/datasets/run_series.sh <tag> maria artem olga   # one after another + summary
 python competition_task/datasets/run_dataset.py maria --user eval_maria
 python competition_task/datasets/grade_dataset.py maria             # → maria/grade_report.md
 ```
 
-История итераций и баллов — `competition_task/iterations/REPORT.md`.
+History of iterations and scores: `competition_task/iterations/REPORT.md`.
 
 ---
 
-## Структура репозитория
+## Repository layout
 
 ```
 backend/
   app/
-    main.py               — FastAPI роуты, CORS, startup, импорт
-    agent.py              — один ход диалога (стрим, маскирование, цитаты, сохранение)
-    agent_graph.py        — LangGraph-граф (agent ⇄ masked tools), выбор LLM
-    chat_gigachat.py      — LangChain-адаптер над GigaChat
-    chat_model.py         — LangChain-адаптер над локальным Qwen3-4B (фолбэк)
-    prompts.py            — сборка системного промпта
-    tools.py              — экшн-тулы, интеграции, memory tools
-    data_tools.py         — инструменты по импортированным данным
-    personal_data.py      — нормализация и хранение импорта, часовой пояс, «сейчас»
-    personal_analytics.py — детерминированная аналитика (календарь, почта, финансы, контакты)
-    profile_builder.py    — цифровой профиль → факты памяти
-    proactive.py          — детекторы проактивных подсказок
-    bank_parser.py        — банковские уведомления → транзакции
-    injection_guard.py    — детектор инъекций и фишинга
-    masking.py            — маскирование секретов (данные, API, логи)
-    documents.py          — разбор вложений PDF/DOCX, удаление скрытого текста
-    google_oauth.py, google_calendar.py, gmail.py — Google-интеграции
-    transcription.py      — голос → текст (cloud.ru Whisper)
-    memory_bridge.py      — мост backend ↔ memory/ (ingest, профиль, удаление)
+    main.py               — FastAPI routes, CORS, startup, import
+    agent.py              — one dialogue turn (stream, masking, citations, saving)
+    agent_graph.py        — LangGraph graph (agent ⇄ masked tools), LLM choice
+    chat_gigachat.py      — LangChain adapter over GigaChat
+    chat_model.py         — LangChain adapter over local Qwen3-4B (fallback)
+    prompts.py            — system prompt assembly
+    tools.py              — action tools, integrations, memory tools
+    data_tools.py         — tools over imported data
+    personal_data.py      — import normalization and storage, time zone, "now"
+    personal_analytics.py — deterministic analytics (calendar, email, finance, contacts)
+    profile_builder.py    — digital profile → memory facts
+    proactive.py          — proactive suggestion detectors
+    bank_parser.py        — bank notifications → transactions
+    injection_guard.py    — injection and phishing detector
+    masking.py            — secret masking (data, API, logs)
+    documents.py          — PDF/DOCX attachment parsing, hidden text removal
+    google_oauth.py, google_calendar.py, gmail.py — Google integrations
+    transcription.py      — voice → text (cloud.ru Whisper)
+    memory_bridge.py      — backend ↔ memory/ bridge (ingest, profile, deletion)
     auth.py, conversations.py, user_settings.py, db.py, schemas.py
-    mcp_tools.py          — опциональные MCP-серверы
-  inspect_memory_index.py — dev-утилита для FAISS-индекса
-  .env.example            — все переменные окружения с комментариями
+    mcp_tools.py          — optional MCP servers
+  inspect_memory_index.py — dev utility for the FAISS index
+  .env.example            — all environment variables with comments
   mcp_servers.example.json
   requirements.txt
 
@@ -972,14 +958,14 @@ frontend/src/
                MemoryPanel, MemoryProgress, FinancePanel, SettingsPanel, McpSettings
   lib/         api.js, auth.js, i18n.jsx, markdown.js, mapbox.js, settings.js
 
-memory/                     — пакет долгосрочной памяти
-  memory_system.py          — фасад (update/retrieve/get_all/delete_all)
-  model_registry.py         — singleton-ы моделей, выбор облако/локально
+memory/                     — long-term memory package
+  memory_system.py          — facade (update/retrieve/get_all/delete_all)
+  model_registry.py         — model singletons, cloud/local choice
   gigachat_client.py, gigachat_text_model.py, gigachat_grammar_normalizer.py,
-    gigachat_embedder.py    — GigaChat-бэкенды
-  cloud_ru_embedder.py, cloud_ru_reranker.py — cloud.ru-бэкенды
+    gigachat_embedder.py    — GigaChat backends
+  cloud_ru_embedder.py, cloud_ru_reranker.py — cloud.ru backends
   qwen_model.py, memory_embedder.py, memory_reranker.py,
-    memory_grammar_normalizer.py, entity_enricher.py — локальные модели
+    memory_grammar_normalizer.py, entity_enricher.py — local models
   models.py                 — Memory/Source/MemoryType/MemoryStatus
   cheap_memory_router.py, memory_input_router.py, candidate_router.py
   unified_memory_analyzer.py, extractor_contextual.py, memory_validator.py
@@ -993,41 +979,39 @@ memory/                     — пакет долгосрочной памяти
   memory_context.py, memory_context_formatter.py
   dreaming_engine.py
 
-competition_task/           — условия кейса, стартовые данные (train_dataset/),
-                              датасеты и оценщики (datasets/, test_data/), отчёты (iterations/)
+competition_task/           — case description, starter data (train_dataset/),
+                              datasets and graders (datasets/, test_data/), reports (iterations/)
 
-dev.sh                      — debug-запуск обоих сразу
-backend.sh / frontend.sh    — запуск по отдельности
-stop.sh                     — остановка (по портам 8001/5173)
-deploy.sh                   — обновление стенда на сервере
+dev.sh                      — debug run of both at once
+backend.sh / frontend.sh    — run separately
+stop.sh                     — stop (by ports 8001/5173)
+deploy.sh                   — update a server deployment
 ```
 
 ---
 
-## Известные ограничения
+## Known limitations
 
-- GLiNER пока всегда локальный (CPU) — у него нет API-аналога; поэтому
-  `requirements.txt` по-прежнему тянет torch/transformers.
-- `GigaChat-2` иногда игнорирует шкалу `confidence` (всегда 0.0) и формат
-  JSON-массива — формат чинится автоматически, качество стоит
-  перепроверять; при необходимости — `GigaChat-2-Pro/Max` через
-  `GIGACHAT_LITE_MODEL`.
-- Эмбеддинги GigaChat на тарифе `GIGACHAT_API_PERS` недоступны (402), поэтому
-  эмбеддер и реранкер — на cloud.ru.
-- Фоновое извлечение фактов при большом импорте занимает время: точные
-  вопросы по данным работают сразу, а профиль в памяти дозаполняется
-  постепенно.
-- Детекторы инъекций и банковский парсер — эвристические: хорошо обобщаются
-  на типовые атаки и формулировки, но не гарантируют 100% покрытия.
-- В локальном режиме (без ключей) нужен GPU с запасом VRAM; на 8 ГБ
-  Qwen3-4B + эмбеддер + реранкер занимают почти всё (GLiNER и нормализатор
-  поэтому по умолчанию на CPU).
-- Автоматического пересчёта `importance`/`freshness`/`expired` во времени
-  нет — поля в модели `Memory` есть, фонового процесса нет.
-- PDF читается только текстовым слоем: сканы (PDF из картинок) без OCR не
-  распознаются; XLSX пока не поддерживается.
-- «Сейчас» — реальное время в часовом поясе пользователя. Для воспроизводимой
-  проверки на наборе данных с фиксированной опорной датой его можно
-  «заморозить» переменной `ASSISTANT_NOW` (на стенде не задана).
-- Google OAuth-приложение в тестовом режиме: Календарь и Gmail подключаются
-  только для адресов из списка Test users, доступ истекает через 7 дней.
+- GLiNER is always local (CPU) for now, since it has no API equivalent; that's
+  why `requirements.txt` still pulls torch/transformers.
+- `GigaChat-2` sometimes ignores the `confidence` scale (always 0.0) and the
+  JSON array format. The format is repaired automatically, but quality is worth
+  double-checking; if needed, use `GigaChat-2-Pro/Max` via `GIGACHAT_LITE_MODEL`.
+- GigaChat embeddings are unavailable on the `GIGACHAT_API_PERS` plan (402), so
+  the embedder and reranker run on cloud.ru.
+- Background fact extraction for a large import takes time: precise data
+  questions work immediately, while the memory profile fills in gradually.
+- The injection detectors and the bank parser are heuristic: they generalize
+  well to typical attacks and phrasings but don't guarantee 100% coverage.
+- Local mode (no keys) needs a GPU with spare VRAM; on 8 GB, Qwen3-4B + embedder
+  + reranker take almost all of it (which is why GLiNER and the normalizer run
+  on CPU by default).
+- There is no automatic recalculation of `importance`/`freshness`/`expired`
+  over time: the fields exist in the `Memory` model, but no background process
+  updates them.
+- PDFs are read only from the text layer: scans (image-only PDFs) aren't
+  recognized without OCR; XLSX isn't supported yet.
+- "Now" is the real time in the user's time zone. For reproducible checks on a
+  dataset with a fixed reference date it can be "frozen" with `ASSISTANT_NOW`.
+- While the Google OAuth app is in testing mode, Calendar and Gmail connect only
+  for addresses on the Test users list, and access expires after 7 days.

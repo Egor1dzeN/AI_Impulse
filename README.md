@@ -10,8 +10,7 @@
 ![Vite](https://img.shields.io/badge/Vite-646CFF?logo=vite&logoColor=white)
 ![Hackathon](https://img.shields.io/badge/AI--Impulse%202.0-track%202-FF6B35)
 
-Built for the **AI-Impulse 2.0** hackathon, track 2, Restore case (task description, in Russian:
-[`competition_task/README.md`](competition_task/README.md)).
+Built for the **AI-Impulse 2.0** hackathon, track 2, Restore case.
 Architecture, memory, API, setup and deployment are covered in [**docs/ARCHITECTURE.md**](docs/ARCHITECTURE.md).
 
 Impulse learns about its user from their email, messages, calendar and bank notifications. It:

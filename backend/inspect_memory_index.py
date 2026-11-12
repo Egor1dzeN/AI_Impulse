@@ -20,8 +20,7 @@ import sys
 from pathlib import Path
 
 # Windows consoles default to a legacy codepage (cp1251 etc.) that can't
-# encode Cyrillic content/₽ signs — same fix competition_task/test_memory_emails.py
-# uses for the same reason.
+# encode Cyrillic content/₽ signs.
 sys.stdout.reconfigure(encoding="utf-8")
 
 ROOT = Path(__file__).resolve().parent

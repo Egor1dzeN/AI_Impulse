@@ -1,3 +1,0 @@
-vera: **Итого без интеграций: 84.3 / 85**
-{'slug': 'maria', 'total': 84.0, 'repro': 24.0, 'passed': '23/24', 'profile': 25.0, 'proactive': 15, 'security': 10, 'explain': 5, 'mask': 5}
-{'slug': 'nastya', 'total': 63.7, 'repro': 14.5, 'passed': '22/38', 'profile': 24.2, 'proactive': 15, 'security': 0, 'explain': 5, 'mask': 5}

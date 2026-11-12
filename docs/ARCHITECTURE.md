@@ -3,8 +3,7 @@
 > Product overview (how to load data and what to try) is in [README.md](../README.md).
 
 A personal AI assistant with long-term memory and proactive actions
-(**AI-Impulse 2.0** hackathon, track 2, Restore case; task description, in Russian:
-[`competition_task/README.md`](../competition_task/README.md)).
+(**AI-Impulse 2.0** hackathon, track 2, Restore case).
 
 The assistant builds up knowledge about its user on its own. From messages
 (email, Telegram), the calendar and bank notifications it assembles a **digital
@@ -45,7 +44,6 @@ offline development, but it needs a GPU.
 - [Data storage](#data-storage)
 - [Backend API](#backend-api)
 - [Frontend](#frontend)
-- [Self-check on reference questions](#self-check-on-reference-questions)
 - [Repository layout](#repository-layout)
 - [Known limitations](#known-limitations)
 
@@ -86,8 +84,9 @@ After start:
 - Frontend: http://localhost:5173 (logs → `frontend_run.log`, pid → `frontend.pid`)
 
 Open **http://localhost:5173**, register (username/password or Google) and
-attach dataset files in the chat (for example, files from
-`competition_task/train_dataset/`).
+attach your data files in the chat (email, Telegram or calendar exports as
+`.jsonl` or a JSON array; see
+[Data import](#data-import-and-the-digital-profile)).
 
 Stop both processes:
 
@@ -882,45 +881,6 @@ relative `/api/...` through the Vite proxy. `lib/auth.js` stores the JWT in
 
 ---
 
-## Self-check on reference questions
-
-`competition_task/eval_reference.py` runs the control questions from
-`competition_task/train_dataset/reference_answers.md` through the real agent: it
-loads the dataset into a separate eval user, freezes "now" at the dataset's
-reference moment (`ASSISTANT_NOW`), asks every question **twice** with different
-wording in new chats and checks that both answers contain the expected values.
-
-```bash
-python competition_task/eval_reference.py                  # load + ask everything
-python competition_task/eval_reference.py --no-load q11 q14
-python competition_task/eval_reference.py --with-memory    # also fill fact memory (slow)
-python competition_task/eval_reference.py --security       # plant attacks in the data
-python competition_task/eval_reference.py --data other_dir --now 2026-10-01T10:00:00+03:00
-```
-
-Requires `backend/.env` with GigaChat keys: every question is a real LLM call.
-The open reference data is only an example; the final evaluation used a
-different, closed dataset, so solutions must generalize rather than be tuned to
-it.
-
-`competition_task/test_memory_emails.py` is a separate check of fact extraction
-from emails.
-
-**Dataset series.** `competition_task/datasets/` contains a synthetic persona
-generator (`gen.py`, `personas.py`) and an end-to-end run through the live API:
-full account wipe → upload → every question twice with different wording in new
-chats → security checks → grading by the competition criteria:
-
-```bash
-bash competition_task/datasets/run_series.sh <tag> maria artem olga   # one after another + summary
-python competition_task/datasets/run_dataset.py maria --user eval_maria
-python competition_task/datasets/grade_dataset.py maria             # → maria/grade_report.md
-```
-
-History of iterations and scores: `competition_task/iterations/REPORT.md`.
-
----
-
 ## Repository layout
 
 ```
@@ -978,9 +938,6 @@ memory/                     — long-term memory package
   memory_retriever.py, memory_retriever_v2.py
   memory_context.py, memory_context_formatter.py
   dreaming_engine.py
-
-competition_task/           — case description, starter data (train_dataset/),
-                              datasets and graders (datasets/, test_data/), reports (iterations/)
 
 docs/
   ARCHITECTURE.md           — this document

@@ -1,5 +1,0 @@
-vera: **Итого без интеграций: 71.7 / 85**
-{'slug': 'denis', 'total': 81.7, 'repro': 21.7, 'passed': '33/38', 'profile': 25.0, 'proactive': 15, 'security': 10, 'explain': 5, 'mask': 5}
-{'slug': 'artem', 'total': 78.1, 'repro': 20.4, 'passed': '31/38', 'profile': 22.8, 'proactive': 15, 'security': 10, 'explain': 5, 'mask': 5}
-{'slug': 'olga', 'total': 73.0, 'repro': 23.0, 'passed': '35/38', 'profile': 25.0, 'proactive': 15, 'security': 0, 'explain': 5, 'mask': 5}
-SERIES DONE

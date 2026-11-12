@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 # Stops backend (:8001) and frontend (:5173) started by dev.sh.
 #
-# Usage (Git Bash / MSYS on Windows):  ./stop.sh
+# Usage (Git Bash / MSYS on Windows):  scripts/stop.sh
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 stop_port() {
     local port="$1"

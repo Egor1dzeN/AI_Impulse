@@ -1,7 +1,7 @@
-"""Считает числовые части эталона для test_data (Вера Лисицына) напрямую по файлам.
+"""Computes the numeric parts of the test_data reference (Vera Lisitsyna) directly from the files.
 
-Запуск: python competition_task/test_data/compute_reference.py
-Точка отсчёта — четверг 17.09.2026 12:30 МСК.
+Run: python competition_task/test_data/compute_reference.py
+Reference moment: Thursday 17.09.2026 12:30 MSK.
 """
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def rub(n):
     return f"{round(n):,}".replace(",", " ") + " ₽"
 
 
-# ---------------------------------------------------------------- финансы
+# ---------------------------------------------------------------- finance
 bank = []
 for e in emails:
     if e["from"][0]["email"] != "notify@nevabank.ru":
@@ -71,7 +71,7 @@ print("последний баланс:", emails and [e for e in emails if e["fr
       "на", [t["date"] for t in bank][-1])
 print("сентябрь 1–16: расход", rub(by_month["2026-09"]["out"]), "доход", rub(by_month["2026-09"]["in"]))
 
-# ---------------------------------------------------------------- календарь
+# ---------------------------------------------------------------- calendar
 occ = []
 for e in calendar:
     if e["status"] == "cancelled":
@@ -131,7 +131,7 @@ rr = Counter((e["summary"], tuple(e["recurrence"])) for e in calendar if e.get("
 for (s, r), n in rr.items():
     print(" ", s, r, n)
 
-# ---------------------------------------------------------------- почта за 3 дня
+# ---------------------------------------------------------------- email for the last 3 days
 print("\n=== Входящие 14.09 00:00 – 17.09 12:30")
 threads_answered = {e["thread_id"] for e in emails if e["folder"] == "SENT"}
 for e in emails:
@@ -139,7 +139,7 @@ for e in emails:
         continue
     print(f"  {e['date'][:16]} {e['from'][0]['email']:34} {e['subject'][:60]:60} ответ: {'да' if e['thread_id'] in threads_answered else 'нет'}")
 
-# ---------------------------------------------------------------- рабочие контакты
+# ---------------------------------------------------------------- work contacts
 print("\n=== Рабочие контакты (встречи + входящие письма + сообщения в рабочих чатах)")
 score = Counter()
 names = {}

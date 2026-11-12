@@ -242,7 +242,7 @@ class CandidateGrounder:
         if best_entity is None:
             return None
 
-        # Не принимаем слабые совпадения.
+        # Don't accept weak matches.
         if best_score < 0.72:
             return None
 

@@ -1,9 +1,9 @@
-"""Прогон test_data (Вера Лисицына) на живом бэкенде — как жюри через UI.
+"""Runs test_data (Vera Lisitsyna) on a live backend, the way the jury does via the UI.
 
-Запуск: backend/.venv/Scripts/python.exe competition_task/test_data/run_test.py [--phase all|load|ask|security]
-Бэкенд: http://127.0.0.1:8001, ASSISTANT_NOW=2026-09-17T12:30:00. Аккаунт Test/Test будет очищен.
-Результаты: test_data/eval_results.json, экспорт памяти — test_data/eval_memory_export.json.
-Затем: python competition_task/test_data/grade.py
+Run: backend/.venv/Scripts/python.exe competition_task/test_data/run_test.py [--phase all|load|ask|security]
+Backend: http://127.0.0.1:8001, ASSISTANT_NOW=2026-09-17T12:30:00. The Test/Test account will be wiped.
+Results: test_data/eval_results.json, memory export: test_data/eval_memory_export.json.
+Then: python competition_task/test_data/grade.py
 """
 from __future__ import annotations
 

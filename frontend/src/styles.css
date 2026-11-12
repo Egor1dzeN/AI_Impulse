@@ -1,6 +1,6 @@
 /* ── Impulse ─────────────────────────────────────────────────────────
-   Чистая бумага + сигнальный оранжевый.
-   Одна колонка, один поставленный момент движения: ядро уезжает в шапку.
+   Clean paper + signal orange.
+   One column, one staged motion moment: the core moves up into the header.
    ─────────────────────────────────────────────────────────────────── */
 
 :root{
@@ -29,9 +29,9 @@
   --font-display: "Unbounded", var(--font-ui);
 }
 
-/* Тёмная тема: два пути к одним и тем же значениям —
-   media query для "системной" темы (когда пользователь её не переопределил)
-   и явный атрибут для принудительного выбора в Настройках. */
+/* Dark theme: two paths to the same values —
+   a media query for the "system" theme (when the user hasn't overridden it)
+   and an explicit attribute for a forced choice in Settings. */
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
     color-scheme: dark;
@@ -101,7 +101,7 @@ svg{ width:100%; height:100%; fill:none; stroke:currentColor; stroke-width:1.6; 
   border-radius:6px;
 }
 
-/* ── Шапка ───────────────────────────────────────────────────────── */
+/* ── Header ──────────────────────────────────────────────────────── */
 
 .bar{
   position:relative;
@@ -188,7 +188,7 @@ body.is-chat .mark{ padding-left:52px }
   line-height:1.5;
 }
 
-/* ── Ядро ────────────────────────────────────────────────────────── */
+/* ── Core ────────────────────────────────────────────────────────── */
 
 .stage{
   position:fixed;
@@ -216,8 +216,8 @@ body.is-chat .mark{ padding-left:52px }
 }
 body.is-chat .stage::before{ opacity:0 }
 
-/* Стартовый экран: сфера прокручивается вместе с заставкой, а не висит поверх
-   карточек «Ассистент заметил». Во время прокрутки — без анимации перехода. */
+/* Start screen: the sphere scrolls together with the hero instead of hanging over
+   the "Assistant noticed" cards. No transition animation while scrolling. */
 body:not(.is-chat) .stage{
   transform:translateX(-50%) translateY(calc(-1 * var(--hero-scroll, 0px)));
   opacity:var(--hero-fade, 1);
@@ -233,7 +233,7 @@ body.is-chat .stage{
 }
 #core{ display:block; width:100%; height:100% }
 
-/* Запасной вариант, если WebGL недоступен */
+/* Fallback when WebGL is unavailable */
 .stage.is-flat::after{
   content:"";
   position:absolute;
@@ -244,7 +244,7 @@ body.is-chat .stage{
 }
 @keyframes breathe{ 50%{ transform:scale(.93) } }
 
-/* ── Главная область ─────────────────────────────────────────────── */
+/* ── Main area ───────────────────────────────────────────────────── */
 
 .main{
   position:relative;
@@ -256,7 +256,7 @@ body.is-chat .stage{
 .main::-webkit-scrollbar{ width:10px }
 .main::-webkit-scrollbar-thumb{ background:var(--line-strong); border:3px solid var(--paper); border-radius:999px }
 
-/* ── Заставка ────────────────────────────────────────────────────── */
+/* ── Hero ────────────────────────────────────────────────────────── */
 
 .hero{
   width:var(--rail);
@@ -352,7 +352,7 @@ body.is-chat .hero{
 .proactive__details{ font-size:13px; color:var(--ink-soft) }
 .proactive__action{ font-size:12.5px; color:var(--flare-deep) }
 
-/* ── Лента ───────────────────────────────────────────────────────── */
+/* ── Feed ────────────────────────────────────────────────────────── */
 
 .feed{
   width:var(--rail);
@@ -550,10 +550,10 @@ body.is-chat .feed{ display:flex }
 }
 @keyframes thinking-in{ from{ opacity:0; transform:translateY(3px) } }
 
-/* ── Поле ввода ──────────────────────────────────────────────────── */
+/* ── Composer ────────────────────────────────────────────────────── */
 
-/* На стартовом экране поле ввода подтянуто к заставке;
-   с первым сообщением оно опускается вниз — вместе с ядром. */
+/* On the start screen the composer is pulled up to the hero;
+   with the first message it drops to the bottom, together with the core. */
 .dock{
   --lift:0px;
   padding:6px 20px 16px;
@@ -631,7 +631,7 @@ body.is-chat .dock{ transform:none }
 }
 .composer__attachment-remove:hover{ color:var(--flare-deep); background:rgba(255,90,0,.12) }
 
-/* space-between держит кнопку отправки справа, когда подсказка скрыта */
+/* space-between keeps the send button on the right when the hint is hidden */
 .composer__row{ display:flex; align-items:center; justify-content:space-between; gap:12px }
 .composer__reasoning{ flex:none }
 
@@ -656,7 +656,7 @@ body.is-chat .dock{ transform:none }
 .composer__mic-spinner{ animation:mic-spin .8s linear infinite }
 @keyframes mic-spin{ to{ transform:rotate(360deg) } }
 
-/* ── Выпадающее меню ─────────────────────────────────────────────── */
+/* ── Dropdown menu ───────────────────────────────────────────────── */
 
 .menu{ position:relative; display:inline-flex }
 
@@ -789,7 +789,7 @@ body.is-chat .dock{ transform:none }
 .msg__file svg{ width:14px; height:14px; flex:none; fill:none; stroke:var(--flare); stroke-width:1.4; stroke-linejoin:round }
 .msg__file span{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap }
 
-/* ── Авторизация ─────────────────────────────────────────────────── */
+/* ── Auth ────────────────────────────────────────────────────────── */
 
 .auth{
   grid-row:1 / -1;
@@ -900,13 +900,13 @@ body.is-chat .dock{ transform:none }
 .auth__switch{ align-self:center }
 .auth__other{ align-self:center }
 
-/* ── Мобильные ───────────────────────────────────────────────────── */
+/* ── Mobile ──────────────────────────────────────────────────────── */
 
 @media (max-width:600px){
   :root{ --rail:calc(100vw - 28px); --stage-size:min(250px, 30vh, 64vw) }
   .hint{ display:none }
   .hero__sub{ font-size:15px }
-  /* подсказки уезжают в один прокручиваемый ряд — заставка остаётся невысокой */
+  /* suggestions collapse into one scrollable row so the hero stays short */
   .chips{
     margin-inline:-14px;
     padding-inline:14px;
@@ -932,7 +932,7 @@ body.is-chat .dock{ transform:none }
   .caret{ display:none }
 }
 
-/* ── Действие ассистента ────────────────────────────────────────── */
+/* ── Assistant action ───────────────────────────────────────────── */
 
 .action-badge{
   display:inline-flex;
@@ -1091,7 +1091,7 @@ body.is-chat .dock{ transform:none }
 .calendar-delete-row__status{ flex:none; font-size:12.5px; font-weight:500; color:#2ecc71 }
 .calendar-delete-row__status--error{ color:var(--flare-deep) }
 
-/* ── Панель памяти ───────────────────────────────────────────────── */
+/* ── Memory panel ────────────────────────────────────────────────── */
 
 .memory-panel{
   position:fixed;
@@ -1271,7 +1271,7 @@ body.is-chat .dock{ transform:none }
 .memory-list__remove:hover{ color:var(--flare-deep); background:var(--flare-tint) }
 .memory-list__remove:disabled{ opacity:.5 }
 
-/* ── Панель финансов ─────────────────────────────────────────────── */
+/* ── Finance panel ───────────────────────────────────────────────── */
 
 .finance-panel{
   position:fixed;
@@ -1372,7 +1372,7 @@ body.is-chat .dock{ transform:none }
 .finance-list__amount--income{ color:#2ecc71 }
 .finance-list__amount--expense{ color:var(--flare-deep) }
 
-/* ── Список чатов ────────────────────────────────────────────────── */
+/* ── Chat list ───────────────────────────────────────────────────── */
 
 .chat-list{
   position:fixed;
@@ -1457,7 +1457,7 @@ body.is-chat .dock{ transform:none }
 .chat-list__item-title:focus-visible,
 .chat-list__item-remove:focus-visible{ outline-offset:-2px; border-radius:10px }
 
-/* ── Настройки ───────────────────────────────────────────────────── */
+/* ── Settings ────────────────────────────────────────────────────── */
 
 .settings-panel{
   position:fixed;

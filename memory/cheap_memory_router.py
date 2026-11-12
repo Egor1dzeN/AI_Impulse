@@ -11,13 +11,13 @@ class MemoryRoute(str, Enum):
 
 class CheapMemoryRouter:
     """
-    Дешёвый deterministic router перед MemoryExtractor.
+    A cheap deterministic router in front of MemoryExtractor.
 
-    Он НЕ определяет, что именно нужно сохранить.
-    Его задача только мгновенно отсечь:
-    - команды;
-    - вопросы;
-    - короткие служебные/разговорные сообщения.
+    It does NOT decide what exactly should be saved.
+    Its only job is to instantly drop:
+    - commands;
+    - questions;
+    - short service/small-talk messages.
     """
 
     COMMAND_PATTERN = re.compile(

@@ -24,7 +24,7 @@ export default function SettingsPanel({ open, onClose }) {
     { value: 'en', label: t('settings.langEn') },
   ];
   const [theme, setThemeState] = useState(getTheme);
-  const [connected, setConnected] = useState(null); // null = ещё не загружено
+  const [connected, setConnected] = useState(null); // null = not loaded yet
   const [loading, setLoading] = useState(false);
   const [showConnectForm, setShowConnectForm] = useState(false);
   const [keyInput, setKeyInput] = useState('');

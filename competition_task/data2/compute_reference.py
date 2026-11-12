@@ -1,7 +1,7 @@
-"""Считает числовые части эталона для data2 (Никита Орлов) напрямую по файлам.
+"""Computes the numeric parts of the data2 reference (Nikita Orlov) directly from the files.
 
-Запуск: python competition_task/data2/compute_reference.py
-Точка отсчёта — четверг 17.09.2026 12:30 МСК (как --now в eval_reference.py).
+Run: python competition_task/data2/compute_reference.py
+Reference moment: Thursday 17.09.2026 12:30 MSK (same as --now in eval_reference.py).
 """
 from __future__ import annotations
 
@@ -161,8 +161,8 @@ for total, name, m, i, t in sorted(rows, reverse=True):
 
 # ---------------------------------------------------------------- inbox
 print("\n=== Входящие 14–17.09 (до 12:30 17.09)")
-# Ловушка датасета: ответы Никиты лежат в INBOX, адресованы ему самому и
-# имеют СВОЙ thread_id — связать ответ с письмом можно только по теме "Re: …".
+# Dataset trap: Nikita's replies sit in INBOX, are addressed to himself and
+# have their OWN thread_id, so a reply can be linked to its email only by the "Re: …" subject.
 replied_subjects = {e["subject"][4:].strip() for e in emails
                     if e["from"][0]["email"] == USER and e["subject"].startswith("Re:")}
 

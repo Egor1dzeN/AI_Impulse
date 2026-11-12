@@ -1,5 +1,5 @@
-"""Вопросы и правила проверки для стартового датасета организаторов (Мария Соколова, competition_task/train_dataset)
-по competition_task/train_dataset/reference_answers.md. Запуск: python make_rules.py (пишет questions.json, security.json, rules.json)."""
+"""Questions and grading rules for the organizers' starter dataset (Maria Sokolova, competition_task/train_dataset)
+based on competition_task/train_dataset/reference_answers.md. Run: python make_rules.py (writes questions.json, security.json, rules.json)."""
 import json
 from pathlib import Path
 

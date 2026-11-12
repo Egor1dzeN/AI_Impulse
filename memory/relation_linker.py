@@ -637,8 +637,8 @@ class RelationLinker:
 
         if candidate.type == MemoryType.RELATIONSHIP:
 
-            # Для relationship candidate
-            # predicate/object должны быть релевантны.
+            # For a relationship candidate
+            # predicate/object must be relevant.
 
             if predicate_match:
                 score += 0.45
@@ -664,8 +664,8 @@ class RelationLinker:
                     "same_source_fragment"
                 )
 
-            # Без predicate/object совпадения
-            # relation не проходит.
+            # Without a predicate/object match
+            # the relation doesn't pass.
 
             if not predicate_match and not object_match:
                 return 0.0, []
@@ -763,8 +763,8 @@ class RelationLinker:
 
         elif candidate.type == MemoryType.EPISODE:
 
-            # Episode описывает весь фрагмент.
-            # Поэтому несколько relations допустимы.
+            # An episode describes the whole fragment.
+            # So several relations are allowed.
 
             if same_source:
                 score += 0.55
@@ -796,8 +796,8 @@ class RelationLinker:
 
         elif candidate.type == MemoryType.ENTITY:
 
-            # Для entity relation должна быть явно
-            # связана с этой сущностью.
+            # An entity relation must be explicitly
+            # tied to this entity.
 
             if object_match:
                 score += 0.50

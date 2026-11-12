@@ -1,8 +1,18 @@
 # Impulse — a personal assistant with long-term memory
 
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+![Python](https://img.shields.io/badge/Python-3.11+-3776AB?logo=python&logoColor=white)
+![FastAPI](https://img.shields.io/badge/FastAPI-009688?logo=fastapi&logoColor=white)
+![LangGraph](https://img.shields.io/badge/LangGraph-1C3C3C?logo=langchain&logoColor=white)
+![GigaChat](https://img.shields.io/badge/LLM-GigaChat-21A038)
+![FAISS](https://img.shields.io/badge/FAISS-vector%20search-0467DF)
+![React](https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black)
+![Vite](https://img.shields.io/badge/Vite-646CFF?logo=vite&logoColor=white)
+![Hackathon](https://img.shields.io/badge/AI--Impulse%202.0-track%202-FF6B35)
+
 Built for the **AI-Impulse 2.0** hackathon, track 2, Restore case (task description, in Russian:
 [`competition_task/README.md`](competition_task/README.md)).
-Architecture, memory, API, setup and deployment are covered in [**README_TECH.md**](README_TECH.md) (in Russian).
+Architecture, memory, API, setup and deployment are covered in [**docs/ARCHITECTURE.md**](docs/ARCHITECTURE.md).
 
 Impulse learns about its user from their email, messages, calendar and bank notifications. It:
 
@@ -132,4 +142,10 @@ data analytics, proactive detectors, the bank notification parser, prompt-inject
 masking, hidden-text detection in documents, integrations (Google, Intervals.icu, CBR, Open Food
 Facts, maps, weather, MCP), action confirmation flow, and the web UI.
 
-To run it locally, see [README_TECH.md](README_TECH.md).
+To run it locally, see [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md#quick-start).
+
+---
+
+## License
+
+[MIT](LICENSE)

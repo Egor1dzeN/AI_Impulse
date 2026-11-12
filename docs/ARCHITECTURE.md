@@ -1,10 +1,10 @@
-# Impulse — technical overview
+# Impulse — architecture
 
-> Product overview (how to load data and what to try) is in [README.md](README.md).
+> Product overview (how to load data and what to try) is in [README.md](../README.md).
 
 A personal AI assistant with long-term memory and proactive actions
 (**AI-Impulse 2.0** hackathon, track 2, Restore case; task description, in Russian:
-[`competition_task/README.md`](competition_task/README.md)).
+[`competition_task/README.md`](../competition_task/README.md)).
 
 The assistant builds up knowledge about its user on its own. From messages
 (email, Telegram), the calendar and bank notifications it assembles a **digital
@@ -53,7 +53,7 @@ offline development, but it needs a GPU.
 
 ## Quick start
 
-The one-command way to start everything is `dev.sh` (Git Bash / MSYS; works on
+The one-command way to start everything is `scripts/dev.sh` (Git Bash / MSYS; works on
 Windows, Linux and macOS). It is also the **debug run with hot reload**: backend
 and frontend pick up changes on the fly.
 
@@ -64,13 +64,13 @@ cp backend/.env.example backend/.env
 # fill in at least GIGA_CHAT_IDE and GIGA_CHAT_EMBEDDING — see below
 ```
 
-`backend.sh`/`dev.sh` load `backend/.env` before starting uvicorn.
+`scripts/backend.sh`/`scripts/dev.sh` load `backend/.env` before starting uvicorn.
 The file is in `.gitignore` and never goes into the repository.
 
 ### Option 1 — one command (recommended)
 
 ```bash
-./dev.sh
+scripts/dev.sh
 ```
 
 It kills anything already listening on ports 8001/5173, creates `backend/.venv`
@@ -92,27 +92,27 @@ attach dataset files in the chat (for example, files from
 Stop both processes:
 
 ```bash
-./stop.sh
+scripts/stop.sh
 ```
 
 > **Note on `memory/`:** changes in the `memory/` package (it lives in the
 > project root, outside `backend/app/`) are **not** reloaded automatically. This
 > is intentional: memory models and clients are created lazily there, and a full
 > uvicorn restart on every edit would reload them. After editing `memory/`,
-> restart `./dev.sh` manually.
+> restart `scripts/dev.sh` manually.
 
 ### Option 2 — separately, in two terminals
 
 ```bash
-./backend.sh   # first terminal — FastAPI/uvicorn, port 8001
+scripts/backend.sh   # first terminal — FastAPI/uvicorn, port 8001
 ```
 
 ```bash
-./frontend.sh  # second terminal — Vite dev server, port 5173
+scripts/frontend.sh  # second terminal — Vite dev server, port 5173
 ```
 
 Both run in the foreground (output is also written to `*_run.log`) and stop with
-Ctrl+C or `./stop.sh`. Backend health check: http://127.0.0.1:8001/api/health
+Ctrl+C or `scripts/stop.sh`. Backend health check: http://127.0.0.1:8001/api/health
 
 <details>
 <summary>Fully manual, without scripts</summary>
@@ -201,9 +201,9 @@ cp backend/.env.example backend/.env    # GigaChat/cloud.ru keys, AUTH_SECRET_KE
 Updating — one command on the server:
 
 ```bash
-cd ~/ai_impulse && ./deploy.sh          # git pull, dependencies/build only when changed,
+cd ~/ai_impulse && scripts/deploy.sh          # git pull, dependencies/build only when changed,
                                         # restart affected services, check /api/health
-./deploy.sh --force                     # rebuild and restart everything
+scripts/deploy.sh --force                     # rebuild and restart everything
 ```
 
 **Audit log** (`backend/app/audit.py`): a full history of who asked what and
@@ -982,10 +982,14 @@ memory/                     — long-term memory package
 competition_task/           — case description, starter data (train_dataset/),
                               datasets and graders (datasets/, test_data/), reports (iterations/)
 
-dev.sh                      — debug run of both at once
-backend.sh / frontend.sh    — run separately
-stop.sh                     — stop (by ports 8001/5173)
-deploy.sh                   — update a server deployment
+docs/
+  ARCHITECTURE.md           — this document
+
+scripts/
+  dev.sh                    — debug run of both at once
+  backend.sh / frontend.sh  — run separately
+  stop.sh                   — stop (by ports 8001/5173)
+  deploy.sh                 — update a server deployment
 ```
 
 ---

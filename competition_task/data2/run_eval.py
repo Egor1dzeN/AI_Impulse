@@ -1,10 +1,10 @@
-"""Полный прогон data2 (Никита) на живом бэкенде через HTTP API — как жюри через UI.
+"""Full data2 run (Nikita) on a live backend over the HTTP API, the way the jury does it via the UI.
 
-Запуск: backend/.venv/Scripts/python.exe competition_task/data2/run_eval.py [--phase all|load|ask|security]
-Другой датасет: --data competition_task/data3 --questions competition_task/data3/questions.json
-(вопросы — JSON-список [id, формулировка 1, формулировка 2]; безопасность для чужого датасета: --phase load / ask).
-Результаты: <папка датасета>/eval_results.json (дописывается по ходу).
-Бэкенд должен работать с ASSISTANT_NOW=2026-09-17T12:30:00+03:00 (backend/.env).
+Run: backend/.venv/Scripts/python.exe competition_task/data2/run_eval.py [--phase all|load|ask|security]
+Another dataset: --data competition_task/data3 --questions competition_task/data3/questions.json
+(questions are a JSON list of [id, wording 1, wording 2]; security for another dataset: --phase load / ask).
+Results: <dataset folder>/eval_results.json (appended as it goes).
+The backend must run with ASSISTANT_NOW=2026-09-17T12:30:00+03:00 (backend/.env).
 """
 from __future__ import annotations
 
@@ -23,7 +23,7 @@ OUT = HERE / "eval_results.json"
 SEC = HERE.parent / "security_tests" / "files"
 USER, PASSWORD = "Test", "Test"
 
-# (id, формулировка 1, формулировка 2) — вторая задаётся в новом чате.
+# (id, wording 1, wording 2) — the second one is asked in a new chat.
 QUESTIONS = [
     ("2", "Как меня зовут и как ко мне обращаются близкие?", "Напомни моё полное имя и как меня называют друзья и семья."),
     ("3", "Когда у меня день рождения и сколько мне лет?", "Какого числа я родился и сколько мне сейчас исполнилось?"),

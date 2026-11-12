@@ -1,9 +1,9 @@
-"""Персоны для gen.py. Каждая отличается городом/часовым поясом, полом, шаблоном банковских
-уведомлений, рабочими часами, видами спорта, ловушками и текстами атак — чтобы проверять обобщение."""
+"""Personas for gen.py. Each differs in city/time zone, gender, bank notification template,
+working hours, sports, traps and attack texts, to test generalization."""
 
 PERSONAS = {}
 
-# ------------------------------------------------------------------ 1. Новосибирск, UTC+7, SMS-банк
+# ------------------------------------------------------------------ 1. Novosibirsk, UTC+7, SMS bank
 PERSONAS["artem"] = dict(
     slug="artem", seed=4101, first="Артём", last="Соколов", patronymic="Игоревич", gender="m",
     email="a.sokolov@sibfintech.ru", company="СибФинТех", company_legal="ООО «СибФинТех»", company_re="СибФинТех",
@@ -100,7 +100,7 @@ PERSONAS["artem"] = dict(
     merchant_count=dict(re="YANDEX GO", label="ездил на такси", noun="поездок на такси"),
 )
 
-# ------------------------------------------------------------------ 2. Казань, МСК, формат как у организаторов
+# ------------------------------------------------------------------ 2. Kazan, MSK, same format as the organizers'
 PERSONAS["olga"] = dict(
     slug="olga", seed=5202, first="Ольга", last="Миронова", patronymic="Сергеевна", gender="f",
     email="o.mironova@tatlogistic.ru", company="ТатЛогистик", company_legal="ООО «ТатЛогистик»", company_re="ТатЛогистик",
@@ -196,7 +196,7 @@ PERSONAS["olga"] = dict(
     merchant_count=dict(re="Яндекс Go", label="ездила на такси", noun="поездок на такси"),
 )
 
-# ------------------------------------------------------------------ 3. Екатеринбург, UTC+5, «подписной» шаблон, день с 10:00
+# ------------------------------------------------------------------ 3. Yekaterinburg, UTC+5, "subscription" template, workday from 10:00
 PERSONAS["denis"] = dict(
     slug="denis", seed=6303, first="Денис", last="Ковалёв", patronymic="Андреевич", gender="m",
     email="d.kovalev@uralstroy.ru", company="УралСтройИнвест", company_legal="АО «УралСтройИнвест»", company_re="УралСтрой",
@@ -295,7 +295,7 @@ PERSONAS["denis"] = dict(
     merchant_count=dict(re="Лукойл", label="заправлялся", noun="заправок"),
 )
 
-# ------------------------------------------------------------------ 4. Москва, ДР только из поздравлений, норма — от тренера в чате
+# ------------------------------------------------------------------ 4. Moscow, birthday only from greetings, calorie target from the coach in chat
 PERSONAS["nastya"] = dict(
     slug="nastya", seed=7404, first="Анастасия", last="Белова", patronymic="Олеговна", gender="f",
     no_hr_birthday=True, fitness_via_coach=True,

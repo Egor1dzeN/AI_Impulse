@@ -12,12 +12,12 @@
 # frontend_run.log). Backend runs in THIS process's foreground, streamed
 # straight to the console (and tee'd to backend_run.log) — that's the one
 # you're usually watching/debugging, so its logs shouldn't be hidden in a
-# file. Stop everything with Ctrl+C (or ./stop.sh from another terminal).
+# file. Stop everything with Ctrl+C (or scripts/stop.sh from another terminal).
 #
 # Want full live logs for BOTH instead of frontend's being backgrounded?
-# Run ./backend.sh and ./frontend.sh in two separate terminals instead.
+# Run scripts/backend.sh and scripts/frontend.sh in two separate terminals instead.
 #
-# Usage (Git Bash / MSYS on Windows):  ./dev.sh
+# Usage (Git Bash / MSYS on Windows):  scripts/dev.sh
 #
 # Note: the memory/ package (project root, outside backend/app) is NOT
 # watched, so editing it needs a manual re-run of this script. That's
@@ -28,7 +28,7 @@
 
 set -e
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 stop_port() {
     local port="$1"
@@ -56,7 +56,7 @@ cd "$root/frontend"
 # (e.g. someone else's commit added a dependency), node_modules exists but
 # is stale, and a plain "does the directory exist" check would miss it.
 if [ ! -d "node_modules" ] || [ "package-lock.json" -nt "node_modules/.package-lock.json" ]; then
-    echo "frontend/node_modules отсутствует или устарел, ставлю зависимости..."
+    echo "frontend/node_modules is missing or stale, installing dependencies..."
     npm install
 fi
 
@@ -72,7 +72,7 @@ echo ""
 # --- backend: create venv + install deps if missing ---
 cd "$root/backend"
 if [ ! -f ".venv/Scripts/python.exe" ]; then
-    echo "backend/.venv не найден, создаю venv и ставлю зависимости (это может занять несколько минут)..."
+    echo "backend/.venv not found, creating venv and installing dependencies (this may take a few minutes)..."
     python -m venv .venv
     .venv/Scripts/python.exe -m pip install --upgrade pip
     .venv/Scripts/python.exe -m pip install -r requirements.txt
@@ -85,7 +85,7 @@ if [ -f ".env" ]; then
     set +a
 fi
 
-echo "backend  http://127.0.0.1:8001  (логи ниже, также пишутся в backend_run.log; Ctrl+C — стоп)"
+echo "backend  http://127.0.0.1:8001  (logs below, also written to backend_run.log; Ctrl+C to stop)"
 echo ""
 
 # PYTHONIOENCODING=utf-8: on Windows, stdout falls back to the console

@@ -30,8 +30,8 @@ class MemoryContextBuilder:
             if memory.status.value == "active"
         ]
 
-        # Пока просто ограничиваем объём контекста.
-        # Позже сюда добавим настоящий retrieval/ranking.
+        # For now we just limit the context size.
+        # Real retrieval/ranking will be added here later.
 
         active_memories = active_memories[
             : self.max_memories

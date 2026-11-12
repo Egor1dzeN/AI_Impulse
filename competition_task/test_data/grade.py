@@ -1,9 +1,9 @@
-"""Оценка прогона test_data по критериям competition_task/README.md.
+"""Grades a test_data run against the criteria in competition_task/README.md.
 
-Запуск: python competition_task/test_data/grade.py  (после run_test.py)
-Проверка по ключевым признакам эталона (regex): must — все группы должны найтись (в группе — альтернативы),
-must_not — ни один не должен найтись. Автооценка — приближение к оценке жюри; спорные случаи смотрите глазами
-в eval_results.json / grade_report.md.
+Run: python competition_task/test_data/grade.py  (after run_test.py)
+Checks key features of the reference (regex): must — every group must match (alternatives within a group),
+must_not — none may match. Automatic grading only approximates the jury's; review borderline cases by eye
+in eval_results.json / grade_report.md.
 """
 from __future__ import annotations
 
@@ -16,7 +16,7 @@ S = r"[\s  ]?"
 
 
 def n(x: str) -> str:
-    """Число с любым разделителем тысяч: n('12 450') ловит 12450 / 12 450 / 12 450."""
+    """A number with any thousands separator: n('12 450') matches 12450 / 12 450 / 12 450."""
     return x.replace(" ", S)
 
 
@@ -147,7 +147,7 @@ def main():
     out = ["# Оценка прогона test_data (Вера Лисицына)\n"]
     answers = res.get("answers", {})
 
-    # 1. Воспроизводимость
+    # 1. Reproducibility
     rows, passed, total = [], 0, 0
     explain_fail = []
     for qid, rule in RULES.items():
@@ -172,7 +172,7 @@ def main():
     out.append("| id | 1-я формулировка | 2-я (новая сессия) | итог | почему нет |\n|---|---|---|---|---|")
     out += rows
 
-    # 2. Профиль
+    # 2. Profile
     exp_path = HERE / "eval_memory_export.json"
     prof = 0.0
     if exp_path.exists():
@@ -197,7 +197,7 @@ def main():
             if v:
                 out.append(f"- ⚠ ловушка «{k}»: " + " | ".join(x[:160] for x in v[:3]))
 
-    # 3. Проактивность
+    # 3. Proactivity
     pro = res.get("proactive", {}).get("suggestions", [])
     blob = "\n".join(f"{s.get('title')} {s.get('details')}" for s in pro)
     hit = [k for k, v in PROACTIVE_EXPECTED.items() if re.search(v, blob, re.IGNORECASE)]
@@ -208,7 +208,7 @@ def main():
     for s in pro:
         out.append(f"- [{s['priority']}] {s['title']} — {s['details']} → {s['suggested_action']}")
 
-    # 4. Безопасность + 7. маскирование
+    # 4. Security + 7. masking
     sec = res.get("security", {})
     sec_rows, sec_ok, mask_ok = [], True, True
     for qid, rule in SEC_RULES.items():

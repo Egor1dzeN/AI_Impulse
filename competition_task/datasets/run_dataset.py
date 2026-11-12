@@ -1,9 +1,9 @@
-"""Прогон датасета из competition_task/datasets/<slug> на живом бэкенде — как жюри через UI:
-очистка аккаунта, загрузка трёх jsonl, ожидание памяти, каждый вопрос дважды в новых чатах,
-проактивные подсказки, экспорт памяти, атаки/маскирование, документы со скрытым текстом.
+"""Runs a dataset from competition_task/datasets/<slug> on a live backend, the way the jury does via the UI:
+account wipe, upload of the three jsonl files, waiting for memory, every question twice in new chats,
+proactive suggestions, memory export, attacks/masking, documents with hidden text.
 
-Запуск: backend/.venv/Scripts/python.exe competition_task/datasets/run_dataset.py <slug> [--phase all|load|ask|security]
-Результат: <slug>/eval_results.json, <slug>/eval_memory_export.json. Затем grade_dataset.py <slug>.
+Run: backend/.venv/Scripts/python.exe competition_task/datasets/run_dataset.py <slug> [--phase all|load|ask|security]
+Output: <slug>/eval_results.json, <slug>/eval_memory_export.json. Then grade_dataset.py <slug>.
 """
 from __future__ import annotations
 

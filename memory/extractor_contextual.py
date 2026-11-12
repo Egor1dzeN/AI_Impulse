@@ -926,8 +926,8 @@ class MemoryExtractor:
                 return candidates
 
         # ---------------------------------------------------------
-        # Завершение задачи: создаём state candidate, который сможет
-        # закрыть соответствующую active goal на этапе consolidation.
+        # Task completion: create a state candidate that can
+        # close the matching active goal during consolidation.
         # ---------------------------------------------------------
         completion_match = re.match(
             r"^\s*отчет\s+(?:я\s+)?(?:уже\s+)?(?:закончил|закончила|завершил|завершила)\s*[.!?]?\s*$",

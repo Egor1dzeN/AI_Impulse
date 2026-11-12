@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Последовательный прогон нескольких датасетов (по одному — чтобы не упираться в лимиты GigaChat) + оценка.
-# Использование: bash competition_task/datasets/run_series.sh <tag> vera denis artem olga maria
-# vera — это competition_task/test_data (свой раннер/оценщик), остальные — datasets/<slug>.
+# Runs several datasets one after another (one at a time, to stay within GigaChat limits) + grading.
+# Usage: bash competition_task/datasets/run_series.sh <tag> vera denis artem olga maria
+# vera is competition_task/test_data (its own runner/grader), the rest are datasets/<slug>.
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$root"
 tag="$1"; shift

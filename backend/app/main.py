@@ -161,7 +161,7 @@ def chat(
 
     response = StreamingResponse(event_stream(), media_type="text/event-stream")
 
-    # Оригинальное сообщение (req.message) отправляем в memory_bridge
+    # Send the original message (req.message) to memory_bridge
     background_tasks.add_task(agent.extract_memory_background, user_id, req.message)
     response.background = background_tasks
     return response

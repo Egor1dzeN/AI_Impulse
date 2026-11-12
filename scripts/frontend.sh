@@ -3,17 +3,17 @@
 # logs stream straight into this console (and are tee'd to frontend_run.log
 # too, for later lookup). Stop with Ctrl+C.
 #
-# Run this in its own terminal window alongside ./backend.sh in another —
+# Run this in its own terminal window alongside scripts/backend.sh in another —
 # that way each process gets a clean, uninterrupted log instead of the two
 # being interleaved or one of them hidden in a background job.
 #
-# For "both at once in one terminal" use ./dev.sh instead.
+# For "both at once in one terminal" use scripts/dev.sh instead.
 #
-# Usage (Git Bash / MSYS on Windows): ./frontend.sh
+# Usage (Git Bash / MSYS on Windows): scripts/frontend.sh
 
 set -e
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 stop_port() {
     local port="$1"
@@ -33,11 +33,11 @@ cd "$root/frontend"
 # (e.g. someone else's commit added a dependency), node_modules exists but
 # is stale, and a plain "does the directory exist" check would miss it.
 if [ ! -d "node_modules" ] || [ "package-lock.json" -nt "node_modules/.package-lock.json" ]; then
-    echo "frontend/node_modules отсутствует или устарел, ставлю зависимости..."
+    echo "frontend/node_modules is missing or stale, installing dependencies..."
     npm install
 fi
 
-echo "frontend  http://localhost:5173  (логи ниже, также пишутся в frontend_run.log; Ctrl+C — стоп)"
+echo "frontend  http://localhost:5173  (logs below, also written to frontend_run.log; Ctrl+C to stop)"
 echo ""
 
 npm run dev 2>&1 | tee "$root/frontend_run.log"

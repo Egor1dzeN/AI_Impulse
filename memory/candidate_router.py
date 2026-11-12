@@ -12,13 +12,13 @@ class CandidateRoute(str, Enum):
 
 class CandidateRouter:
     """
-    Маршрутизация каждого MemoryCandidate независимо от остальных.
+    Routes each MemoryCandidate independently of the others.
 
     FAST:
-        candidate уже получен deterministic/context rule.
+        the candidate was already produced by a deterministic/context rule.
 
     FULL:
-        candidate создан LLM и требует дополнительного анализа.
+        the candidate was created by the LLM and needs further analysis.
     """
 
     FAST_SOURCES = {"rule", "context_rule"}

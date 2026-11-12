@@ -19,17 +19,17 @@ class InputRoute:
 
 class MemoryInputRouter:
     """
-    Быстрый маршрутизатор входного сообщения.
+    Fast router for an incoming message.
 
     DROP:
-        очевидный вопрос или команда.
+        an obvious question or command.
 
     FAST:
-        сообщение можно обработать существующими deterministic rules
-        без Qwen3-4B.
+        the message can be handled by existing deterministic rules
+        without Qwen3-4B.
 
     UNIFIED:
-        требуется UnifiedMemoryAnalyzer / Qwen3-4B.
+        needs UnifiedMemoryAnalyzer / Qwen3-4B.
     """
 
     COMMAND_FIRST_WORD = re.compile(

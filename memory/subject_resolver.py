@@ -98,7 +98,7 @@ class SubjectResolver:
         source = candidate.source_text
 
         # ----------------------------------------------------
-        # Ищем только внутри grounded span.
+        # Search only inside the grounded span.
         # ----------------------------------------------------
 
         span_text = source[
@@ -189,15 +189,15 @@ class SubjectResolver:
         # ----------------------------------------------------
         # User-oriented memory types:
         #
-        # Даже если Qwen переписал:
+        # Even if Qwen rewrote:
         #
         # "Я переехал..."
         #
-        # как:
+        # as:
         #
         # "переехал..."
         #
-        # проверяем оригинальный grounded span.
+        # check the original grounded span.
         # ----------------------------------------------------
 
         if candidate.type in (
@@ -212,11 +212,11 @@ class SubjectResolver:
             if result is not None:
                 return result
 
-            # Для целей часто используется опущенный субъект:
+            # Goals often have an omitted subject:
             # "откладывать 50000 рублей",
             # "снизить вес до 75 кг",
             # "закончить отчёт".
-            # Для GOAL это естественное значение "Пользователь".
+            # For a GOAL the natural value is "Пользователь" (the user).
             if candidate.type == MemoryType.GOAL:
                 return ResolvedSubject(
                     text="Пользователь",

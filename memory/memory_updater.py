@@ -476,7 +476,7 @@ class MemoryUpdater:
         decision: ConsolidationDecision,
     ) -> None:
 
-        # Ничего не изменяем.
+        # Change nothing.
 
         return None
 

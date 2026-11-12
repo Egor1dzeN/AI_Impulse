@@ -3,17 +3,17 @@
 # logs stream straight into this console (and are tee'd to backend_run.log
 # too, for later lookup). Stop with Ctrl+C.
 #
-# Run this in its own terminal window alongside ./frontend.sh in another —
+# Run this in its own terminal window alongside scripts/frontend.sh in another —
 # that way each process gets a clean, uninterrupted log instead of the two
 # being interleaved or one of them hidden in a background job.
 #
-# For "both at once in one terminal" use ./dev.sh instead.
+# For "both at once in one terminal" use scripts/dev.sh instead.
 #
-# Usage (Git Bash / MSYS on Windows): ./backend.sh
+# Usage (Git Bash / MSYS on Windows): scripts/backend.sh
 
 set -e
 
-root="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 stop_port() {
     local port="$1"
@@ -35,7 +35,7 @@ sleep 1
 
 cd "$root/backend"
 if [ ! -f ".venv/Scripts/python.exe" ]; then
-    echo "backend/.venv не найден, создаю venv и ставлю зависимости (это может занять несколько минут)..."
+    echo "backend/.venv not found, creating venv and installing dependencies (this may take a few minutes)..."
     python -m venv .venv
     .venv/Scripts/python.exe -m pip install --upgrade pip
     .venv/Scripts/python.exe -m pip install -r requirements.txt
@@ -48,7 +48,7 @@ if [ -f ".env" ]; then
     set +a
 fi
 
-echo "backend  http://127.0.0.1:8001  (логи ниже, также пишутся в backend_run.log; Ctrl+C — стоп)"
+echo "backend  http://127.0.0.1:8001  (logs below, also written to backend_run.log; Ctrl+C to stop)"
 echo ""
 
 # PYTHONIOENCODING=utf-8: on Windows, stdout falls back to the console

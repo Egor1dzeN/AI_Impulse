@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# Перезапуск бэкенда для прогонов оценки: без --reload (правки кода во время прогона не рвут его),
-# логи — в backend/server.*.log. .env подхватывает само приложение (app/__init__.py).
+# Restarts the backend for evaluation runs: without --reload (code edits during a run don't break it),
+# logs go to backend/server.*.log. The app loads .env itself (app/__init__.py).
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 for pid in $(netstat -ano 2>/dev/null | grep -E "[:.]8001[[:space:]].*LISTENING" | awk '{print $NF}' | sort -u); do
     taskkill //PID "$pid" //T //F >/dev/null 2>&1 || true
 done
-# multiprocessing-воркеры старого uvicorn --reload могут пережить родителя и держать сокет
+# multiprocessing workers of an old uvicorn --reload can outlive the parent and hold the socket
 powershell -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -match 'uvicorn|spawn_main' -and \$_.CommandLine -match 'python' } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force -ErrorAction SilentlyContinue }" >/dev/null 2>&1
 sleep 3
 cd "$root/backend"

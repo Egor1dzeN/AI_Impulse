@@ -1,13 +1,13 @@
 """Read the audit trail (backend/audit/audit-YYYY-MM-DD.jsonl) back as a timeline.
 
-    python backend/scripts/audit_view.py                          # сводка: кто, сколько запросов и ходов чата
-    python backend/scripts/audit_view.py --user Test1             # хронология одного аккаунта
-    python backend/scripts/audit_view.py --user Test1 --full      # с аргументами/результатами инструментов целиком
-    python backend/scripts/audit_view.py --conversation <id>      # один чат
+    python backend/scripts/audit_view.py                          # summary: who, how many requests and chat turns
+    python backend/scripts/audit_view.py --user <username>        # timeline of one account
+    python backend/scripts/audit_view.py --user <username> --full # with full tool arguments/results
+    python backend/scripts/audit_view.py --conversation <id>      # one chat
     python backend/scripts/audit_view.py --since "2026-09-25 10:00" --until "2026-09-25 12:00"
-    python backend/scripts/audit_view.py --event chat_turn_start --user Test2   # только вопросы
-    python backend/scripts/audit_view.py --user Test1 --json > test1.jsonl     # выгрузка как есть
-    python backend/scripts/audit_view.py --prompt <sha>           # системный промпт хода
+    python backend/scripts/audit_view.py --event chat_turn_start --user <username>   # questions only
+    python backend/scripts/audit_view.py --user <username> --json > user.jsonl      # raw export
+    python backend/scripts/audit_view.py --prompt <sha>           # system prompt of a turn
 """
 from __future__ import annotations
 

@@ -76,9 +76,9 @@ class MemoryCandidate:
     user_id: str
     type: MemoryType
 
-    # Нормализованный текст candidate.
+    # Normalized candidate text.
     #
-    # Например:
+    # For example:
     # "Пользователь живёт в Москве"
     content: str
 
@@ -86,9 +86,9 @@ class MemoryCandidate:
     source: Source
     created_at: datetime
 
-    # Оригинальный текст пользователя.
+    # The user's original text.
     #
-    # Именно его используют:
+    # It is exactly what is used by:
     # - NER
     # - Coreference
     # - Temporal
